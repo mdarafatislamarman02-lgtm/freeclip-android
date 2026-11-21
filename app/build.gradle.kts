@@ -12,14 +12,15 @@ android {
         applicationId = "app.freeclip"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildTypes {
         release { isMinifyEnabled = false }
     }
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -32,6 +33,7 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
     implementation(platform("androidx.compose:compose-bom:2024.09.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
@@ -52,4 +54,7 @@ dependencies {
     implementation("com.alphacephei:vosk-android:0.3.47") {
         exclude(group = "net.java.dev.jna")
     }
+
+    // Link import (YouTube)
+    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.5")
 }
