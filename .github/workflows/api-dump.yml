@@ -1,0 +1,51 @@
+name: API dump
+on:
+  push:
+    paths: ['.github/workflows/api-dump.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Dump media3 public APIs
+        run: |
+          set -e
+          V=1.4.1
+          mkdir -p w && cd w
+          for m in common effect exoplayer transformer; do
+            curl -fsSL -o $m.aar https://dl.google.com/android/maven2/androidx/media3/media3-$m/$V/media3-$m-$V.aar
+            mkdir -p $m && unzip -q -o $m.aar -d $m
+          done
+          CP=$(ls */classes.jar | tr '\n' ':')
+          dump() { echo "=================== $1"; javap -public -cp "$CP" "$1" 2>&1 || true; }
+          {
+            for c in androidx.media3.effect.BaseGlShaderProgram androidx.media3.effect.GlShaderProgram \
+              androidx.media3.effect.GlEffect androidx.media3.common.util.GlProgram androidx.media3.common.util.GlUtil \
+              androidx.media3.common.util.Size androidx.media3.common.VideoFrameProcessingException \
+              androidx.media3.effect.OverlayEffect androidx.media3.effect.TextOverlay androidx.media3.effect.BitmapOverlay \
+              androidx.media3.effect.TextureOverlay 'androidx.media3.effect.OverlaySettings$Builder' \
+              androidx.media3.effect.Presentation androidx.media3.transformer.Effects \
+              'androidx.media3.transformer.Transformer$Builder' 'androidx.media3.transformer.EditedMediaItem$Builder' \
+              'androidx.media3.transformer.DefaultEncoderFactory$Builder' 'androidx.media3.transformer.VideoEncoderSettings$Builder' \
+              'androidx.media3.common.MediaItem$ClippingConfiguration$Builder'; do dump "$c"; done
+            echo "=================== ExoPlayer video effect/texture methods"
+            javap -public -cp "$CP" androidx.media3.exoplayer.ExoPlayer 2>&1 | grep -iE "setVideoEffects|setVideoTextureView|setVideoSurface" || true
+          } > ../api-dump.txt 2>&1
+          wc -l ../api-dump.txt
+      - name: Publish dump to branch ci-dump
+        run: |
+          git config user.name "ci"; git config user.email "ci@example.com"
+          git checkout -q --orphan ci-dump
+          git rm -rf -q --cached . || true
+          git add -f api-dump.txt
+          git commit -q -m "api dump"
+          git push -f origin ci-dump

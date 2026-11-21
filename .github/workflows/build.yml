@@ -3,6 +3,9 @@ name: Build APK
 on:
   push:
     branches: [main, master]
+    paths-ignore:
+      - '.github/workflows/api-dump.yml'
+      - '**.md'
   workflow_dispatch:
 
 permissions:
@@ -21,7 +24,21 @@ jobs:
         with:
           gradle-version: 8.9
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleDebug --stacktrace 2>&1 | tee build.log
+      - name: Publish error log to branch ci-log (only if the build failed)
+        if: failure()
+        run: |
+          grep -nE "^e: |error:|FAILED|What went wrong" -A3 build.log | head -150 > /tmp/err.log || true
+          tail -n 60 build.log >> /tmp/err.log
+          git config user.name "ci"; git config user.email "ci@example.com"
+          git checkout -q --orphan ci-log
+          git rm -rf -q --cached . || true
+          cp /tmp/err.log build-error.log
+          git add -f build-error.log
+          git commit -q -m "build error log"
+          git push -f origin ci-log
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk FreeClip.apk
       - uses: actions/upload-artifact@v4
