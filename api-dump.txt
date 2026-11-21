@@ -1,0 +1,279 @@
+=================== androidx.media3.effect.BaseGlShaderProgram
+Compiled from "BaseGlShaderProgram.java"
+public abstract class androidx.media3.effect.BaseGlShaderProgram implements androidx.media3.effect.GlShaderProgram {
+  public androidx.media3.effect.BaseGlShaderProgram(boolean, int);
+  public abstract androidx.media3.common.util.Size configure(int, int) throws androidx.media3.common.VideoFrameProcessingException;
+  public abstract void drawFrame(int, long) throws androidx.media3.common.VideoFrameProcessingException;
+  public void setInputListener(androidx.media3.effect.GlShaderProgram$InputListener);
+  public void setOutputListener(androidx.media3.effect.GlShaderProgram$OutputListener);
+  public void setErrorListener(java.util.concurrent.Executor, androidx.media3.effect.GlShaderProgram$ErrorListener);
+  public boolean shouldClearTextureBuffer();
+  public void queueInputFrame(androidx.media3.common.GlObjectsProvider, androidx.media3.common.GlTextureInfo, long);
+  public void releaseOutputFrame(androidx.media3.common.GlTextureInfo);
+  public void signalEndOfCurrentInputStream();
+  public void flush();
+  public void release() throws androidx.media3.common.VideoFrameProcessingException;
+}
+=================== androidx.media3.effect.GlShaderProgram
+Compiled from "GlShaderProgram.java"
+public interface androidx.media3.effect.GlShaderProgram {
+  public abstract void setInputListener(androidx.media3.effect.GlShaderProgram$InputListener);
+  public abstract void setOutputListener(androidx.media3.effect.GlShaderProgram$OutputListener);
+  public abstract void setErrorListener(java.util.concurrent.Executor, androidx.media3.effect.GlShaderProgram$ErrorListener);
+  public abstract void queueInputFrame(androidx.media3.common.GlObjectsProvider, androidx.media3.common.GlTextureInfo, long);
+  public abstract void releaseOutputFrame(androidx.media3.common.GlTextureInfo);
+  public abstract void signalEndOfCurrentInputStream();
+  public abstract void flush();
+  public abstract void release() throws androidx.media3.common.VideoFrameProcessingException;
+}
+=================== androidx.media3.effect.GlEffect
+Compiled from "GlEffect.java"
+public interface androidx.media3.effect.GlEffect extends androidx.media3.common.Effect {
+  public abstract androidx.media3.effect.GlShaderProgram toGlShaderProgram(android.content.Context, boolean) throws androidx.media3.common.VideoFrameProcessingException;
+  public default boolean isNoOp(int, int);
+}
+=================== androidx.media3.common.util.GlProgram
+Compiled from "GlProgram.java"
+public final class androidx.media3.common.util.GlProgram {
+  public androidx.media3.common.util.GlProgram(android.content.Context, java.lang.String, java.lang.String) throws java.io.IOException, androidx.media3.common.util.GlUtil$GlException;
+  public androidx.media3.common.util.GlProgram(java.lang.String, java.lang.String) throws androidx.media3.common.util.GlUtil$GlException;
+  public int getUniformLocation(java.lang.String);
+  public void use() throws androidx.media3.common.util.GlUtil$GlException;
+  public void delete() throws androidx.media3.common.util.GlUtil$GlException;
+  public int getAttributeArrayLocationAndEnable(java.lang.String) throws androidx.media3.common.util.GlUtil$GlException;
+  public void setBufferAttribute(java.lang.String, float[], int);
+  public void setSamplerTexIdUniform(java.lang.String, int, int);
+  public void setIntUniform(java.lang.String, int);
+  public void setIntsUniform(java.lang.String, int[]);
+  public void setFloatUniform(java.lang.String, float);
+  public void setFloatsUniform(java.lang.String, float[]);
+  public void setFloatsUniformIfPresent(java.lang.String, float[]);
+  public void bindAttributesAndUniforms() throws androidx.media3.common.util.GlUtil$GlException;
+  public void setExternalTexturesRequireNearestSampling(boolean);
+}
+=================== androidx.media3.common.util.GlUtil
+Compiled from "GlUtil.java"
+public final class androidx.media3.common.util.GlUtil {
+  public static final int HOMOGENEOUS_COORDINATE_VECTOR_SIZE;
+  public static final float LENGTH_NDC;
+  public static final int[] EGL_CONFIG_ATTRIBUTES_RGBA_8888;
+  public static final int[] EGL_CONFIG_ATTRIBUTES_RGBA_1010102;
+  public static float[] getNormalizedCoordinateBounds();
+  public static float[] getTextureCoordinateBounds();
+  public static float[] create4x4IdentityMatrix();
+  public static void setToIdentity(float[]);
+  public static float[] createVertexBuffer(java.util.List<float[]>);
+  public static boolean isProtectedContentExtensionSupported(android.content.Context);
+  public static boolean isSurfacelessContextExtensionSupported();
+  public static boolean isYuvTargetExtensionSupported();
+  public static boolean isBt2020PqExtensionSupported();
+  public static boolean isBt2020HlgExtensionSupported();
+  public static android.opengl.EGLDisplay getDefaultEglDisplay() throws androidx.media3.common.util.GlUtil$GlException;
+  public static android.opengl.EGLContext createEglContext(android.opengl.EGLDisplay) throws androidx.media3.common.util.GlUtil$GlException;
+  public static android.opengl.EGLContext createEglContext(android.opengl.EGLContext, android.opengl.EGLDisplay, int, int[]) throws androidx.media3.common.util.GlUtil$GlException;
+  public static android.opengl.EGLSurface createEglSurface(android.opengl.EGLDisplay, java.lang.Object, int, boolean) throws androidx.media3.common.util.GlUtil$GlException;
+  public static android.opengl.EGLSurface createFocusedPlaceholderEglSurface(android.opengl.EGLContext, android.opengl.EGLDisplay) throws androidx.media3.common.util.GlUtil$GlException;
+  public static long getContextMajorVersion() throws androidx.media3.common.util.GlUtil$GlException;
+  public static long createGlSyncFence() throws androidx.media3.common.util.GlUtil$GlException;
+  public static void deleteSyncObject(long) throws androidx.media3.common.util.GlUtil$GlException;
+  public static void deleteSyncObjectQuietly(long);
+  public static void awaitSyncObject(long) throws androidx.media3.common.util.GlUtil$GlException;
+  public static android.opengl.EGLContext getCurrentContext();
+  public static void checkGlError() throws androidx.media3.common.util.GlUtil$GlException;
+  public static void clearFocusedBuffers() throws androidx.media3.common.util.GlUtil$GlException;
+  public static void focusEglSurface(android.opengl.EGLDisplay, android.opengl.EGLContext, android.opengl.EGLSurface, int, int) throws androidx.media3.common.util.GlUtil$GlException;
+  public static void focusFramebuffer(android.opengl.EGLDisplay, android.opengl.EGLContext, android.opengl.EGLSurface, int, int, int) throws androidx.media3.common.util.GlUtil$GlException;
+  public static void focusFramebufferUsingCurrentContext(int, int, int) throws androidx.media3.common.util.GlUtil$GlException;
+  public static java.nio.FloatBuffer createBuffer(float[]);
+  public static int createExternalTexture() throws androidx.media3.common.util.GlUtil$GlException;
+  public static int createTexture(android.graphics.Bitmap) throws androidx.media3.common.util.GlUtil$GlException;
+  public static int createTexture(int, int, boolean) throws androidx.media3.common.util.GlUtil$GlException;
+  public static int generateTexture() throws androidx.media3.common.util.GlUtil$GlException;
+  public static void setTexture(int, android.graphics.Bitmap) throws androidx.media3.common.util.GlUtil$GlException;
+  public static void bindTexture(int, int, int) throws androidx.media3.common.util.GlUtil$GlException;
+  public static int createFboForTexture(int) throws androidx.media3.common.util.GlUtil$GlException;
+  public static void deleteTexture(int) throws androidx.media3.common.util.GlUtil$GlException;
+  public static void destroyEglContext(android.opengl.EGLDisplay, android.opengl.EGLContext) throws androidx.media3.common.util.GlUtil$GlException;
+  public static void destroyEglSurface(android.opengl.EGLDisplay, android.opengl.EGLSurface) throws androidx.media3.common.util.GlUtil$GlException;
+  public static void deleteFbo(int) throws androidx.media3.common.util.GlUtil$GlException;
+  public static void deleteRbo(int) throws androidx.media3.common.util.GlUtil$GlException;
+  public static void checkGlException(boolean, java.lang.String) throws androidx.media3.common.util.GlUtil$GlException;
+}
+=================== androidx.media3.common.util.Size
+Compiled from "Size.java"
+public final class androidx.media3.common.util.Size {
+  public static final androidx.media3.common.util.Size UNKNOWN;
+  public static final androidx.media3.common.util.Size ZERO;
+  public androidx.media3.common.util.Size(int, int);
+  public int getWidth();
+  public int getHeight();
+  public boolean equals(java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+}
+=================== androidx.media3.common.VideoFrameProcessingException
+Compiled from "VideoFrameProcessingException.java"
+public final class androidx.media3.common.VideoFrameProcessingException extends java.lang.Exception {
+  public final long presentationTimeUs;
+  public static androidx.media3.common.VideoFrameProcessingException from(java.lang.Exception);
+  public static androidx.media3.common.VideoFrameProcessingException from(java.lang.Exception, long);
+  public androidx.media3.common.VideoFrameProcessingException(java.lang.String);
+  public androidx.media3.common.VideoFrameProcessingException(java.lang.String, long);
+  public androidx.media3.common.VideoFrameProcessingException(java.lang.String, java.lang.Throwable);
+  public androidx.media3.common.VideoFrameProcessingException(java.lang.String, java.lang.Throwable, long);
+  public androidx.media3.common.VideoFrameProcessingException(java.lang.Throwable);
+  public androidx.media3.common.VideoFrameProcessingException(java.lang.Throwable, long);
+}
+=================== androidx.media3.effect.OverlayEffect
+Compiled from "OverlayEffect.java"
+public final class androidx.media3.effect.OverlayEffect implements androidx.media3.effect.GlEffect {
+  public androidx.media3.effect.OverlayEffect(com.google.common.collect.ImmutableList<androidx.media3.effect.TextureOverlay>);
+  public androidx.media3.effect.BaseGlShaderProgram toGlShaderProgram(android.content.Context, boolean) throws androidx.media3.common.VideoFrameProcessingException;
+  public androidx.media3.effect.GlShaderProgram toGlShaderProgram(android.content.Context, boolean) throws androidx.media3.common.VideoFrameProcessingException;
+}
+=================== androidx.media3.effect.TextOverlay
+Compiled from "TextOverlay.java"
+public abstract class androidx.media3.effect.TextOverlay extends androidx.media3.effect.BitmapOverlay {
+  public static final int TEXT_SIZE_PIXELS;
+  public androidx.media3.effect.TextOverlay();
+  public static androidx.media3.effect.TextOverlay createStaticTextOverlay(android.text.SpannableString);
+  public static androidx.media3.effect.TextOverlay createStaticTextOverlay(android.text.SpannableString, androidx.media3.effect.OverlaySettings);
+  public abstract android.text.SpannableString getText(long);
+  public android.graphics.Bitmap getBitmap(long);
+}
+=================== androidx.media3.effect.BitmapOverlay
+Compiled from "BitmapOverlay.java"
+public abstract class androidx.media3.effect.BitmapOverlay extends androidx.media3.effect.TextureOverlay {
+  public androidx.media3.effect.BitmapOverlay();
+  public static androidx.media3.effect.BitmapOverlay createStaticBitmapOverlay(android.graphics.Bitmap);
+  public static androidx.media3.effect.BitmapOverlay createStaticBitmapOverlay(android.graphics.Bitmap, androidx.media3.effect.OverlaySettings);
+  public static androidx.media3.effect.BitmapOverlay createStaticBitmapOverlay(android.content.Context, android.net.Uri, androidx.media3.effect.OverlaySettings);
+  public abstract android.graphics.Bitmap getBitmap(long) throws androidx.media3.common.VideoFrameProcessingException;
+  public androidx.media3.common.util.Size getTextureSize(long);
+  public int getTextureId(long) throws androidx.media3.common.VideoFrameProcessingException;
+  public float[] getVertexTransformation(long);
+  public void release() throws androidx.media3.common.VideoFrameProcessingException;
+}
+=================== androidx.media3.effect.TextureOverlay
+Compiled from "TextureOverlay.java"
+public abstract class androidx.media3.effect.TextureOverlay {
+  public androidx.media3.effect.TextureOverlay();
+  public abstract int getTextureId(long) throws androidx.media3.common.VideoFrameProcessingException;
+  public abstract androidx.media3.common.util.Size getTextureSize(long);
+  public float[] getVertexTransformation(long);
+  public void configure(androidx.media3.common.util.Size);
+  public androidx.media3.effect.OverlaySettings getOverlaySettings(long);
+  public void release() throws androidx.media3.common.VideoFrameProcessingException;
+}
+=================== androidx.media3.effect.OverlaySettings$Builder
+Compiled from "OverlaySettings.java"
+public final class androidx.media3.effect.OverlaySettings$Builder {
+  public androidx.media3.effect.OverlaySettings$Builder();
+  public androidx.media3.effect.OverlaySettings$Builder setAlphaScale(float);
+  public androidx.media3.effect.OverlaySettings$Builder setBackgroundFrameAnchor(float, float);
+  public androidx.media3.effect.OverlaySettings$Builder setOverlayFrameAnchor(float, float);
+  public androidx.media3.effect.OverlaySettings$Builder setScale(float, float);
+  public androidx.media3.effect.OverlaySettings$Builder setRotationDegrees(float);
+  public androidx.media3.effect.OverlaySettings$Builder setHdrLuminanceMultiplier(float);
+  public androidx.media3.effect.OverlaySettings build();
+}
+=================== androidx.media3.effect.Presentation
+Compiled from "Presentation.java"
+public final class androidx.media3.effect.Presentation implements androidx.media3.effect.MatrixTransformation {
+  public static final int LAYOUT_SCALE_TO_FIT;
+  public static final int LAYOUT_SCALE_TO_FIT_WITH_CROP;
+  public static final int LAYOUT_STRETCH_TO_FIT;
+  public static androidx.media3.effect.Presentation createForAspectRatio(float, int);
+  public static androidx.media3.effect.Presentation createForHeight(int);
+  public static androidx.media3.effect.Presentation createForWidthAndHeight(int, int, int);
+  public androidx.media3.common.util.Size configure(int, int);
+  public android.graphics.Matrix getMatrix(long);
+  public boolean isNoOp(int, int);
+}
+=================== androidx.media3.transformer.Effects
+Compiled from "Effects.java"
+public final class androidx.media3.transformer.Effects {
+  public static final androidx.media3.transformer.Effects EMPTY;
+  public final com.google.common.collect.ImmutableList<androidx.media3.common.audio.AudioProcessor> audioProcessors;
+  public final com.google.common.collect.ImmutableList<androidx.media3.common.Effect> videoEffects;
+  public androidx.media3.transformer.Effects(java.util.List<androidx.media3.common.audio.AudioProcessor>, java.util.List<androidx.media3.common.Effect>);
+  public static android.util.Pair<androidx.media3.common.audio.AudioProcessor, androidx.media3.common.Effect> createExperimentalSpeedChangingEffect(androidx.media3.common.audio.SpeedProvider);
+}
+=================== androidx.media3.transformer.Transformer$Builder
+Compiled from "Transformer.java"
+public final class androidx.media3.transformer.Transformer$Builder {
+  public androidx.media3.transformer.Transformer$Builder(android.content.Context);
+  public androidx.media3.transformer.Transformer$Builder setAudioMimeType(java.lang.String);
+  public androidx.media3.transformer.Transformer$Builder setVideoMimeType(java.lang.String);
+  public androidx.media3.transformer.Transformer$Builder setTransformationRequest(androidx.media3.transformer.TransformationRequest);
+  public androidx.media3.transformer.Transformer$Builder setAudioProcessors(java.util.List<androidx.media3.common.audio.AudioProcessor>);
+  public androidx.media3.transformer.Transformer$Builder setVideoEffects(java.util.List<androidx.media3.common.Effect>);
+  public androidx.media3.transformer.Transformer$Builder setRemoveAudio(boolean);
+  public androidx.media3.transformer.Transformer$Builder setRemoveVideo(boolean);
+  public androidx.media3.transformer.Transformer$Builder setFlattenForSlowMotion(boolean);
+  public androidx.media3.transformer.Transformer$Builder experimentalSetTrimOptimizationEnabled(boolean);
+  public androidx.media3.transformer.Transformer$Builder setEnsureFileStartsOnVideoFrameEnabled(boolean);
+  public androidx.media3.transformer.Transformer$Builder setMaxDelayBetweenMuxerSamplesMs(long);
+  public androidx.media3.transformer.Transformer$Builder setListener(androidx.media3.transformer.Transformer$Listener);
+  public androidx.media3.transformer.Transformer$Builder addListener(androidx.media3.transformer.Transformer$Listener);
+  public androidx.media3.transformer.Transformer$Builder removeListener(androidx.media3.transformer.Transformer$Listener);
+  public androidx.media3.transformer.Transformer$Builder removeAllListeners();
+  public androidx.media3.transformer.Transformer$Builder setAssetLoaderFactory(androidx.media3.transformer.AssetLoader$Factory);
+  public androidx.media3.transformer.Transformer$Builder setAudioMixerFactory(androidx.media3.transformer.AudioMixer$Factory);
+  public androidx.media3.transformer.Transformer$Builder setVideoFrameProcessorFactory(androidx.media3.common.VideoFrameProcessor$Factory);
+  public androidx.media3.transformer.Transformer$Builder setEncoderFactory(androidx.media3.transformer.Codec$EncoderFactory);
+  public androidx.media3.transformer.Transformer$Builder setMuxerFactory(androidx.media3.muxer.Muxer$Factory);
+  public androidx.media3.transformer.Transformer$Builder setLooper(android.os.Looper);
+  public androidx.media3.transformer.Transformer$Builder setDebugViewProvider(androidx.media3.common.DebugViewProvider);
+  public androidx.media3.transformer.Transformer build();
+}
+=================== androidx.media3.transformer.EditedMediaItem$Builder
+Compiled from "EditedMediaItem.java"
+public final class androidx.media3.transformer.EditedMediaItem$Builder {
+  public androidx.media3.transformer.EditedMediaItem$Builder(androidx.media3.common.MediaItem);
+  public androidx.media3.transformer.EditedMediaItem$Builder setRemoveAudio(boolean);
+  public androidx.media3.transformer.EditedMediaItem$Builder setRemoveVideo(boolean);
+  public androidx.media3.transformer.EditedMediaItem$Builder setFlattenForSlowMotion(boolean);
+  public androidx.media3.transformer.EditedMediaItem$Builder setDurationUs(long);
+  public androidx.media3.transformer.EditedMediaItem$Builder setFrameRate(int);
+  public androidx.media3.transformer.EditedMediaItem$Builder setEffects(androidx.media3.transformer.Effects);
+  public androidx.media3.transformer.EditedMediaItem build();
+}
+=================== androidx.media3.transformer.DefaultEncoderFactory$Builder
+Compiled from "DefaultEncoderFactory.java"
+public final class androidx.media3.transformer.DefaultEncoderFactory$Builder {
+  public androidx.media3.transformer.DefaultEncoderFactory$Builder(android.content.Context);
+  public androidx.media3.transformer.DefaultEncoderFactory$Builder setVideoEncoderSelector(androidx.media3.transformer.EncoderSelector);
+  public androidx.media3.transformer.DefaultEncoderFactory$Builder setRequestedVideoEncoderSettings(androidx.media3.transformer.VideoEncoderSettings);
+  public androidx.media3.transformer.DefaultEncoderFactory$Builder setEnableFallback(boolean);
+  public androidx.media3.transformer.DefaultEncoderFactory$Builder setCodecPriority(int);
+  public androidx.media3.transformer.DefaultEncoderFactory build();
+}
+=================== androidx.media3.transformer.VideoEncoderSettings$Builder
+Compiled from "VideoEncoderSettings.java"
+public final class androidx.media3.transformer.VideoEncoderSettings$Builder {
+  public androidx.media3.transformer.VideoEncoderSettings$Builder();
+  public androidx.media3.transformer.VideoEncoderSettings$Builder setBitrate(int);
+  public androidx.media3.transformer.VideoEncoderSettings$Builder setBitrateMode(int);
+  public androidx.media3.transformer.VideoEncoderSettings$Builder setEncodingProfileLevel(int, int);
+  public androidx.media3.transformer.VideoEncoderSettings$Builder setiFrameIntervalSeconds(float);
+  public androidx.media3.transformer.VideoEncoderSettings$Builder setEncoderPerformanceParameters(int, int);
+  public androidx.media3.transformer.VideoEncoderSettings$Builder experimentalSetEnableHighQualityTargeting(boolean);
+  public androidx.media3.transformer.VideoEncoderSettings build();
+}
+=================== androidx.media3.common.MediaItem$ClippingConfiguration$Builder
+Compiled from "MediaItem.java"
+public final class androidx.media3.common.MediaItem$ClippingConfiguration$Builder {
+  public androidx.media3.common.MediaItem$ClippingConfiguration$Builder();
+  public androidx.media3.common.MediaItem$ClippingConfiguration$Builder setStartPositionMs(long);
+  public androidx.media3.common.MediaItem$ClippingConfiguration$Builder setStartPositionUs(long);
+  public androidx.media3.common.MediaItem$ClippingConfiguration$Builder setEndPositionMs(long);
+  public androidx.media3.common.MediaItem$ClippingConfiguration$Builder setEndPositionUs(long);
+  public androidx.media3.common.MediaItem$ClippingConfiguration$Builder setRelativeToLiveWindow(boolean);
+  public androidx.media3.common.MediaItem$ClippingConfiguration$Builder setRelativeToDefaultPosition(boolean);
+  public androidx.media3.common.MediaItem$ClippingConfiguration$Builder setStartsAtKeyFrame(boolean);
+  public androidx.media3.common.MediaItem$ClippingConfiguration build();
+  public androidx.media3.common.MediaItem$ClippingProperties buildClippingProperties();
+}
+=================== ExoPlayer video effect/texture methods
+  public abstract void setVideoEffects(java.util.List<androidx.media3.common.Effect>);
