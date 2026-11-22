@@ -184,9 +184,24 @@ fun CreateScreen(vm: MainVM, onPick: () -> Unit) {
     }
 }
 
+@Composable
+private fun DownloadBanner(vm: MainVM) {
+    if (vm.videoReady) return
+    Panel {
+        Text("Video downloading in the background: ${(vm.dlProgress * 100).toInt()}%", color = C.Cyan, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        LinearProgressIndicator(
+            progress = { vm.dlProgress.coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(6.dp)),
+            color = C.Cyan, trackColor = C.Line,
+        )
+        Text("You can find clips now. Preview and export unlock when it finishes.", color = C.Mute, fontSize = 11.sp)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ReadyCard(vm: MainVM, onPick: () -> Unit) {
+    DownloadBanner(vm)
     Panel {
         Text(vm.videoName, fontWeight = FontWeight.Bold, color = C.Ink)
         Text("${fmt(vm.durationS)} long", color = C.Mute, fontSize = 13.sp)
@@ -290,7 +305,13 @@ private fun StepList(steps: List<String>, current: Int) {
 }
 
 @Composable
-private fun BusyCard(vm: MainVM) = Panel {
+private fun BusyCard(vm: MainVM) {
+    if (vm.stage == Stage.ANALYZING) DownloadBanner(vm)
+    BusyPanel(vm)
+}
+
+@Composable
+private fun BusyPanel(vm: MainVM) = Panel {
     Text(vm.status.ifEmpty { "Working..." }, fontWeight = FontWeight.Bold, color = C.Ink)
     LinearProgressIndicator(
         progress = { vm.progress.coerceIn(0f, 1f) },
@@ -312,6 +333,7 @@ private fun BusyCard(vm: MainVM) = Panel {
 
 @Composable
 private fun ReviewCard(vm: MainVM) {
+    DownloadBanner(vm)
     Text("${vm.moments.size} clips found, best first", color = C.Mute, fontSize = 13.sp)
     vm.moments.forEachIndexed { i, m ->
         Panel {
@@ -332,7 +354,7 @@ private fun ReviewCard(vm: MainVM) {
             }
             Text(m.reasons.joinToString("  |  "), color = C.Cyan, fontSize = 12.sp)
             Text(m.text.take(200) + if (m.text.length > 200) "..." else "", color = C.Mute, fontSize = 12.sp)
-            GradButton("Edit and preview", Modifier.fillMaxWidth()) { vm.editIdx = i }
+            GradButton("Edit and preview", Modifier.fillMaxWidth(), enabled = vm.videoReady) { vm.editIdx = i }
         }
     }
     Panel {
@@ -341,7 +363,7 @@ private fun ReviewCard(vm: MainVM) {
             Chip("720p - fast", vm.res == 720) { vm.res = 720 }
             Chip("1080p - sharper", vm.res == 1080) { vm.res = 1080 }
         }
-        GradButton("Export selected clips (MP4)", Modifier.fillMaxWidth()) { vm.saveDefaults(); vm.render() }
+        GradButton(if (vm.videoReady) "Export selected clips (MP4)" else "Waiting for the video...", Modifier.fillMaxWidth(), enabled = vm.videoReady) { vm.saveDefaults(); vm.render() }
         GhostButton("Change settings and re-analyse", Modifier.fillMaxWidth()) { vm.stage = Stage.READY }
         GhostButton("Start over", Modifier.fillMaxWidth()) { vm.startOver() }
     }

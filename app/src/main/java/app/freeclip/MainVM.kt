@@ -29,6 +29,10 @@ class MainVM(app: Application) : AndroidViewModel(app) {
     var stage by mutableStateOf(Stage.PICK)
     var linkText by mutableStateOf("")
     var videoUri by mutableStateOf<Uri?>(null)
+    /** For YouTube links the audio arrives first: analysis starts from it while the video is still downloading. */
+    var audioUri by mutableStateOf<Uri?>(null)
+    var videoReady by mutableStateOf(true)
+    var dlProgress by mutableStateOf(0f)
     var videoName by mutableStateOf("")
     var durationS by mutableStateOf(0.0)
     var videoAspect by mutableStateOf(16f / 9f)
@@ -61,6 +65,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
 
     private var analysis: Analysis? = null
     private var job: Job? = null
+    private var dlJob: Job? = null
     private val faceCache = HashMap<String, FaceInfo>()
     private val ctx: Application get() = getApplication<Application>()
 
@@ -109,6 +114,8 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             }
             videoName = name
             videoUri = uri
+            audioUri = null
+            videoReady = true
             rangeA = 0f
             // Long videos start with the first 30 minutes (much faster); slide the range to analyse more.
             rangeB = if (durationS > 3600) 1800f else durationS.toFloat()
@@ -151,27 +158,70 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         progress = 0f
         eta = ""
         status = "Getting the video..."
-        job = viewModelScope.launch {
+        audioUri = null
+        videoReady = true
+        dlProgress = 0f
+        dlJob = viewModelScope.launch {
             try {
-                val r = Links.fetch(ctx, url) { msg, p ->
-                    status = msg
-                    progress = p
-                }
-                openLocal(Uri.fromFile(r.file), r.title)
+                val r = Links.fetch(
+                    ctx, url,
+                    { msg, p -> status = msg; progress = p },
+                    early = { f, title, dur -> viewModelScope.launch { openAudioFirst(f, title, dur) } },
+                    onVideo = { dlProgress = it },
+                )
+                if (audioUri != null && !videoReady) attachVideo(r.file) else openLocal(Uri.fromFile(r.file), r.title)
             } catch (e: CancellationException) {
-                stage = Stage.PICK
+                if (audioUri == null) stage = Stage.PICK
                 throw e
             } catch (e: Throwable) {
                 error = e.message ?: e.toString()
-                stage = Stage.PICK
+                if (audioUri == null) stage = Stage.PICK
             }
         }
+    }
+
+    /** The audio of a link is ready: show the options now; the video keeps downloading in the background. */
+    private fun openAudioFirst(f: File, title: String, durS: Double) {
+        videoName = title
+        durationS = durS
+        videoUri = null
+        audioUri = Uri.fromFile(f)
+        videoReady = false
+        dlProgress = 0f
+        rangeA = 0f
+        rangeB = if (durS > 3600) 1800f else durS.toFloat()
+        analysis = null
+        faceCache.clear()
+        moments.clear()
+        results.clear()
+        error = null
+        stage = Stage.READY
+        tab = 1
+    }
+
+    private fun attachVideo(f: File) {
+        try {
+            val r = MediaMetadataRetriever()
+            try {
+                r.setDataSource(ctx, Uri.fromFile(f))
+                var w = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                var h = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val rot = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                if (rot == 90 || rot == 270) { val t = w; w = h; h = t }
+                if (w > 0 && h > 0) videoAspect = w.toFloat() / h
+            } finally {
+                r.release()
+            }
+        } catch (_: Exception) {
+        }
+        videoUri = Uri.fromFile(f)
+        videoReady = true
     }
 
     // ------------------------------------------------------------ analyze: transcript -> moments -> ranking
 
     fun analyze() {
-        val uri = videoUri ?: return
+        val uri = videoUri ?: audioUri ?: return
         error = null
         stage = Stage.ANALYZING
         stepIdx = 1
@@ -250,6 +300,10 @@ class MainVM(app: Application) : AndroidViewModel(app) {
 
     fun render() {
         val uri = videoUri ?: return
+        if (!videoReady) {
+            error = "The video is still downloading (${(dlProgress * 100).toInt()}%). Try again in a moment."
+            return
+        }
         val words = analysis?.words ?: emptyList()
         val todo = moments.filter { it.selected }
         if (todo.isEmpty()) {
@@ -333,6 +387,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
 
     fun cancel() {
         job?.cancel()
+        if (stage == Stage.DOWNLOADING) dlJob?.cancel()
     }
 
     fun backToReview() {
@@ -340,8 +395,11 @@ class MainVM(app: Application) : AndroidViewModel(app) {
     }
 
     fun startOver() {
+        dlJob?.cancel()
         stage = Stage.PICK
         videoUri = null
+        audioUri = null
+        videoReady = true
         moments.clear()
         results.clear()
         analysis = null

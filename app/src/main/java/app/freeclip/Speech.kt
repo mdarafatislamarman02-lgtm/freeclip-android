@@ -17,7 +17,6 @@ import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.ZipInputStream
 import kotlin.math.max
 import kotlin.math.min
@@ -83,7 +82,8 @@ object Speech {
     }
 
     /**
-     * Transcribes [startS, endS] of the video. Progress: model 0-10%, audio decode 10-30%, speech 30-100%.
+     * Transcribes [startS, endS] of the video. The range is cut into parts and each part is decoded AND transcribed
+     * on its own core at the same time. Progress: model 0-10%, then 10-100%.
      * Word times and the loudness curve are in VIDEO time.
      */
     suspend fun analyze(
@@ -100,89 +100,91 @@ object Speech {
         val dir = ensureModel(ctx) { onStatus("Downloading speech model (first time only)...", it * 0.1f) }
         job.ensureActive()
 
-        val pcm = File(ctx.cacheDir, "audio16k.pcm")
-        onStatus("Reading the audio...", 0.1f)
-        val dec = AudioDecoder.decodeToFile(
-            ctx, uri,
-            (startS * 1e6).toLong(), (endS * 1e6).toLong(), ((endS - startS) * 1e6).toLong(),
-            pcm,
-            { onStatus("Reading the audio...", 0.1f + 0.2f * it) },
-            { job.ensureActive() },
-        )
-
-        onStatus("Loading the speech model...", 0.3f)
+        onStatus("Loading the speech model...", 0.1f)
         val model = Model(dir.absolutePath)
-        val words = ArrayList<Word>()
-        try {
-            val totalBytes = dec.samples * 2
-            val parts = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 6)
-            val partBytes = ((totalBytes / parts) / 2) * 2
-            val overlapBytes = AudioDecoder.RATE * 2L * 2 // 2 s of overlap so words on a cut are not lost
-            val done = AtomicLong(0)
+        val hop = AudioDecoder.HOP / AudioDecoder.RATE.toDouble()
+        val span = max(endS - startS, 1.0)
+        val parts = if (span < 120) 1 else (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 6)
+        val segLen = span / parts
+        val prog = DoubleArray(parts)
+        fun report() = onStatus("Listening to the video...", 0.1f + 0.9f * (prog.sum() / parts).toFloat())
 
-            val results = coroutineScope {
+        class Part(val words: List<Word>, val baseS: Double, val rms: FloatArray)
+
+        val results = try {
+            coroutineScope {
                 (0 until parts).map { k ->
                     async(Dispatchers.Default) {
-                        val keepLo = k * partBytes
-                        val keepHi = if (k == parts - 1) totalBytes else (k + 1) * partBytes
-                        val from = max(0L, keepLo - overlapBytes) / 2 * 2
-                        val to = min(totalBytes, keepHi + overlapBytes / 2) / 2 * 2
-                        val out = ArrayList<Word>()
-                        val rec = Recognizer(model, AudioDecoder.RATE.toFloat())
-                        rec.setWords(true)
-                        fun collect(json: String) {
-                            val arr = JSONObject(json).optJSONArray("result") ?: return
-                            for (i in 0 until arr.length()) {
-                                val o = arr.getJSONObject(i)
-                                val s = o.getDouble("start") + from / 2.0 / AudioDecoder.RATE + dec.baseS
-                                val e = o.getDouble("end") + from / 2.0 / AudioDecoder.RATE + dec.baseS
-                                val mid = ((s - dec.baseS + e - dec.baseS) / 2 * AudioDecoder.RATE * 2).toLong()
-                                if (mid >= keepLo && mid < keepHi) out.add(Word(o.getString("word"), s, e))
-                            }
-                        }
+                        val keepLo = startS + k * segLen
+                        val keepHi = if (k == parts - 1) endS + 1.0 else startS + (k + 1) * segLen
+                        val from = max(startS, keepLo - 1.5)
+                        val to = min(endS, keepHi + 0.5)
+                        val pcm = File(ctx.cacheDir, "audio16k_$k.pcm")
                         try {
-                            RandomAccessFile(pcm, "r").use { f ->
-                                f.seek(from)
-                                var left = to - from
-                                val buf = ByteArray(8000)
-                                while (left > 0) {
-                                    ensureActive()
-                                    val n = f.read(buf, 0, min(left, buf.size.toLong()).toInt())
-                                    if (n <= 0) break
-                                    if (rec.acceptWaveForm(buf, n)) collect(rec.result)
-                                    left -= n
-                                    val d = done.addAndGet(n.toLong())
-                                    if (k == 0) {
-                                        val frac = (d.toFloat() / max(1L, totalBytes + overlapBytes * parts / 2)).coerceIn(0f, 1f)
-                                        onStatus("Listening to the video...", 0.3f + 0.7f * frac)
-                                    }
+                            val dec = AudioDecoder.decodeToFile(
+                                ctx, uri, (from * 1e6).toLong(), (to * 1e6).toLong(), ((to - from) * 1e6).toLong(), pcm,
+                                { prog[k] = 0.3 * it; report() },
+                                { ensureActive() },
+                            )
+                            val out = ArrayList<Word>()
+                            val rec = Recognizer(model, AudioDecoder.RATE.toFloat())
+                            rec.setWords(true)
+                            fun collect(json: String) {
+                                val arr = JSONObject(json).optJSONArray("result") ?: return
+                                for (i in 0 until arr.length()) {
+                                    val o = arr.getJSONObject(i)
+                                    val s = o.getDouble("start") + dec.baseS
+                                    val e = o.getDouble("end") + dec.baseS
+                                    val mid = (s + e) / 2
+                                    if (mid >= keepLo && mid < keepHi) out.add(Word(o.getString("word"), s, e))
                                 }
                             }
-                            collect(rec.finalResult)
+                            try {
+                                val total = max(1L, pcm.length())
+                                RandomAccessFile(pcm, "r").use { f ->
+                                    val buf = ByteArray(8000)
+                                    var read = 0L
+                                    while (true) {
+                                        ensureActive()
+                                        val n = f.read(buf)
+                                        if (n <= 0) break
+                                        if (rec.acceptWaveForm(buf, n)) collect(rec.result)
+                                        read += n
+                                        prog[k] = 0.3 + 0.7 * (read.toDouble() / total)
+                                        if (k == 0) report()
+                                    }
+                                }
+                                collect(rec.finalResult)
+                            } finally {
+                                rec.close()
+                            }
+                            prog[k] = 1.0
+                            Part(out, dec.baseS, dec.rms)
                         } finally {
-                            rec.close()
+                            pcm.delete()
                         }
-                        out
                     }
                 }.awaitAll()
             }
-            for (r in results) words.addAll(r)
         } finally {
             model.close()
-            pcm.delete()
         }
-        words.sortBy { it.s }
+
+        val words = results.flatMap { it.words }.sortedBy { it.s }
 
         // Loudness curve in VIDEO time (index = time / hop).
-        val hop = AudioDecoder.HOP / AudioDecoder.RATE.toDouble()
         val n = (durationS / hop).toInt() + 2
         val energy = FloatArray(n)
-        val sorted = dec.rms.sorted()
-        val ref = if (sorted.isEmpty()) 1f else max(sorted[((sorted.size - 1) * 0.95).toInt()], 1e-6f)
-        val off = (dec.baseS / hop).toInt()
-        for (i in dec.rms.indices) {
-            val j = off + i
-            if (j in 0 until n) energy[j] = (min(dec.rms[i] / ref, 1.5f) / 1.5f)
+        val all = ArrayList<Float>()
+        for (p in results) for (v in p.rms) all.add(v)
+        all.sort()
+        val ref = if (all.isEmpty()) 1f else max(all[((all.size - 1) * 0.95).toInt()], 1e-6f)
+        for (p in results) {
+            val off = (p.baseS / hop).toInt()
+            for (i in p.rms.indices) {
+                val j = off + i
+                if (j in 0 until n) energy[j] = min(p.rms[i] / ref, 1.5f) / 1.5f
+            }
         }
         Analysis(words, energy, hop)
     }

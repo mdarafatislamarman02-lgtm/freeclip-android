@@ -20,6 +20,11 @@ import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.StreamType
 import java.io.File
+import java.io.ByteArrayOutputStream
+import java.io.RandomAccessFile
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import java.io.FileOutputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
@@ -99,7 +104,17 @@ object Links {
         return u
     }
 
-    suspend fun fetch(ctx: Context, rawUrl: String, onStatus: (String, Float) -> Unit): Result =
+    /**
+     * [early] is called as soon as the audio of a YouTube video is on the phone (file, title, duration in seconds),
+     * so analysis can start while the video is still downloading; [onVideo] then reports the video's progress.
+     */
+    suspend fun fetch(
+        ctx: Context,
+        rawUrl: String,
+        onStatus: (String, Float) -> Unit,
+        early: ((File, String, Double) -> Unit)? = null,
+        onVideo: ((Float) -> Unit)? = null,
+    ): Result =
         withContext(Dispatchers.IO) {
             val cc = currentCoroutineContext()
             val check = { cc.ensureActive() }
@@ -107,7 +122,7 @@ object Links {
             dir.listFiles()?.forEach { it.delete() } // keep only the current video
             if (!rawUrl.startsWith("http")) throw IllegalArgumentException("Paste a full link that starts with https://")
 
-            if (isYouTube(rawUrl)) youtube(rawUrl, dir, onStatus, check) else direct(normalize(rawUrl), dir, onStatus, check)
+            if (isYouTube(rawUrl)) youtube(rawUrl, dir, onStatus, check, early, onVideo) else direct(normalize(rawUrl), dir, onStatus, check)
         }
 
     // ------------------------------------------------------------------ direct links
@@ -154,7 +169,14 @@ object Links {
 
     // ------------------------------------------------------------------ YouTube
 
-    private fun youtube(url: String, dir: File, onStatus: (String, Float) -> Unit, check: () -> Unit): Result {
+    private fun youtube(
+        url: String,
+        dir: File,
+        onStatus: (String, Float) -> Unit,
+        check: () -> Unit,
+        early: ((File, String, Double) -> Unit)?,
+        onVideo: ((Float) -> Unit)?,
+    ): Result {
         onStatus("Reading the YouTube link...", 0f)
         if (!npReady) {
             NewPipe.init(AppDownloader())
@@ -198,14 +220,29 @@ object Links {
             val v = File(dir, "yt_video.mp4")
             val a = File(dir, "yt_audio.m4a")
             val out = File(dir, "yt_${System.currentTimeMillis() / 1000}.mp4")
-            onStatus("Downloading video (${vo.height}p)...", 0f)
-            fetchFile(vo.content, v, check) { onStatus("Downloading video (${vo.height}p)...", it * 0.8f) }
-            onStatus("Downloading audio...", 0.8f)
-            fetchFile(au.content, a, check) { onStatus("Downloading audio...", 0.8f + it * 0.15f) }
+            // Video and audio download at the same time. The small audio finishes first, so analysis can start right away.
+            var vErr: Throwable? = null
+            val vThread = Thread {
+                try {
+                    fetchFile(vo.content, v, check) {
+                        if (early != null) onVideo?.invoke(it) else onStatus("Downloading video (${vo.height}p)...", it * 0.9f)
+                    }
+                } catch (t: Throwable) {
+                    vErr = t
+                }
+            }
+            vThread.start()
+            onStatus("Downloading audio...", 0f)
+            fetchFile(au.content, a, check) { if (early == null) Unit else onStatus("Downloading audio...", it) }
+            early?.invoke(a, title, info.duration.toDouble())
+            while (vThread.isAlive) {
+                check()
+                vThread.join(300)
+            }
+            vErr?.let { throw it }
             onStatus("Putting video and audio together...", 0.95f)
             mux(v, a, out)
             v.delete()
-            a.delete()
             return Result(out, title)
         }
 
@@ -217,25 +254,46 @@ object Links {
         return Result(out, title)
     }
 
-    /** Downloads a googlevideo URL in 10 MB pieces (avoids slow throttled single requests). */
+    /** Downloads a googlevideo URL as 4 MB pieces on 6 connections at once (single connections are throttled). */
     private fun fetchFile(url: String, dest: File, check: () -> Unit, onProgress: (Float) -> Unit) {
         val clen = Uri.parse(url).getQueryParameter("clen")?.toLongOrNull()
-        var done = 0L
-        FileOutputStream(dest).use { out ->
-            if (clen == null || clen <= 0) {
-                get(url, out, check) { done += it }
-            } else {
-                var pos = 0L
-                while (pos < clen) {
-                    val end = min(pos + CHUNK - 1, clen - 1)
-                    get("$url&range=$pos-$end", out, check) {
-                        done += it
-                        onProgress((done.toFloat() / clen).coerceIn(0f, 1f))
-                    }
-                    pos = end + 1
-                }
-            }
+        if (clen == null || clen <= 0) {
+            var done = 0L
+            FileOutputStream(dest).use { out -> get(url, out, check) { done += it } }
+            return
         }
+        val chunk = 4L * 1024 * 1024
+        val total = ((clen + chunk - 1) / chunk).toInt()
+        val next = AtomicInteger(0)
+        val done = AtomicLong(0)
+        val err = AtomicReference<Throwable?>(null)
+        RandomAccessFile(dest, "rw").use { raf ->
+            raf.setLength(clen)
+            val ch = raf.channel
+            val threads = (1..6).map {
+                Thread {
+                    try {
+                        while (err.get() == null) {
+                            val i = next.getAndIncrement()
+                            if (i >= total) break
+                            val pos = i * chunk
+                            val end = min(pos + chunk - 1, clen - 1)
+                            val bos = ByteArrayOutputStream((end - pos + 1).toInt())
+                            get("$url&range=$pos-$end", bos, check) {
+                                onProgress((done.addAndGet(it.toLong()).toFloat() / clen).coerceIn(0f, 1f))
+                            }
+                            val bb = ByteBuffer.wrap(bos.toByteArray())
+                            var p = pos
+                            while (bb.hasRemaining()) p += ch.write(bb, p)
+                        }
+                    } catch (t: Throwable) {
+                        err.compareAndSet(null, t)
+                    }
+                }.also { it.start() }
+            }
+            threads.forEach { it.join() }
+        }
+        err.get()?.let { throw it }
     }
 
     private fun get(url: String, out: OutputStream, check: () -> Unit, onBytes: (Int) -> Unit) {
