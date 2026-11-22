@@ -34,6 +34,24 @@ class Store(ctx: Context) {
         get() = sp.getString("creator", "") ?: ""
         set(v) { sp.edit().putString("creator", v).apply() }
 
+    /** 0 = offline, 1 = Groq Whisper, 2 = Deepgram Nova-3 (needs the person's own key). */
+    var stt: Int
+        get() = sp.getInt("stt", 0)
+        set(v) { sp.edit().putInt("stt", v).apply() }
+    /** 0 = built-in titles, 1 = Groq Llama, 2 = Gemini. */
+    var titleAi: Int
+        get() = sp.getInt("titleAi", 0)
+        set(v) { sp.edit().putInt("titleAi", v).apply() }
+    var groqKey: String
+        get() = sp.getString("groqKey", "") ?: ""
+        set(v) { sp.edit().putString("groqKey", v.trim()).apply() }
+    var deepgramKey: String
+        get() = sp.getString("deepgramKey", "") ?: ""
+        set(v) { sp.edit().putString("deepgramKey", v.trim()).apply() }
+    var geminiKey: String
+        get() = sp.getString("geminiKey", "") ?: ""
+        set(v) { sp.edit().putString("geminiKey", v.trim()).apply() }
+
     fun loadLibrary(): List<LibraryClip> = try {
         if (!libFile.exists()) emptyList() else {
             val arr = JSONArray(libFile.readText())

@@ -597,7 +597,23 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                         report(msg, p)
                         if (p > 0.32f) eta = etaText(t0, p)
                     }
-                    val tr = try {
+                    val cfg = when (store.stt) {
+                        1 -> store.groqKey.takeIf { it.isNotBlank() }?.let { Speech.CloudCfg(Cloud.Stt.GROQ, it) }
+                        2 -> store.deepgramKey.takeIf { it.isNotBlank() }?.let { Speech.CloudCfg(Cloud.Stt.DEEPGRAM, it) }
+                        else -> null
+                    }
+                    val cloudTr: Analysis? = if (cfg == null) null else try {
+                        Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble(), onStatus, cloud = cfg)
+                            .also { notice = "Transcript made with ${cfg.stt.label}." }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        Diag.log(ctx, "CLOUD STT failed, using offline", e)
+                        notice = "${cfg.stt.label} failed (${e.message ?: e.javaClass.simpleName}), so the offline method was used."
+                        report("Cloud failed, using the offline method...", 0f)
+                        null
+                    }
+                    val tr = cloudTr ?: try {
                         Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble(), onStatus)
                     } catch (e: CancellationException) {
                         throw e
@@ -619,10 +635,14 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                 phase = "Detecting viral moments"
                 report("Finding interesting moments...", 1f)
                 val len = LENGTHS[lengthIdx]
-                val found = Moments.find(a.words, a.energy, a.hop, durationS, nClips, len.min, len.max, Moments.keywords(prompt))
+                var found = Moments.find(a.words, a.energy, a.hop, durationS, nClips, len.min, len.max, Moments.keywords(prompt))
                 stepIdx = 3
                 phase = "Generating clips"
                 report("Ranking the clips...", 1f)
+                if (found.isNotEmpty() && store.titleAi != 0) {
+                    report("Writing better titles with AI...", 1f)
+                    found = withContext(Dispatchers.IO) { Cloud.improveTitles(ctx, store, found) }
+                }
                 exportStatus.clear()
                 results.clear()
                 moments.clear()

@@ -8,6 +8,9 @@ import android.util.Size
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
@@ -399,6 +402,7 @@ private fun BusyPanel(vm: MainVM) = Panel {
 private fun ReviewCard(vm: MainVM) {
     DownloadBanner(vm)
     Text("${vm.moments.size} clips found, best first", color = C.Mute, fontSize = 13.sp)
+    vm.notice?.let { Text(it, color = C.Warn, fontSize = 12.sp) }
     vm.moments.forEachIndexed { i, m ->
         Panel {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -704,6 +708,51 @@ fun SettingsScreen(vm: MainVM) {
             vm.timings["analyze"]?.let { Text("Listening and transcript: ${it / 1000} s", color = C.Ink, fontSize = 13.sp) }
             vm.timings["export"]?.let { Text("Export, per clip: ${it / 1000} s", color = C.Ink, fontSize = 13.sp) }
             Text("Send me these numbers if it is still slow, so the real bottleneck can be fixed.", color = C.Mute, fontSize = 11.sp)
+        }
+        Panel {
+            Label("Faster, better results (optional)")
+            Text(
+                "Paste your OWN free key. Then transcription runs in the cloud (much faster) and titles can be written by AI. " +
+                    "The free limit is yours, not shared with others. No key = everything stays offline and free. " +
+                    "Cloud mode uploads the video's audio (and clip text for titles) to that service.",
+                color = C.Mute, fontSize = 12.sp,
+            )
+            val scope = rememberCoroutineScope()
+            var tStt by remember { mutableStateOf(vm.store.stt) }
+            var tTitle by remember { mutableStateOf(vm.store.titleAi) }
+            var kGroq by remember { mutableStateOf(vm.store.groqKey) }
+            var kDg by remember { mutableStateOf(vm.store.deepgramKey) }
+            var kGem by remember { mutableStateOf(vm.store.geminiKey) }
+            var testMsg by remember { mutableStateOf("") }
+            Label("Transcription")
+            ChipRow {
+                Chip("Offline (free)", tStt == 0) { tStt = 0; vm.store.stt = 0 }
+                Chip("Groq Whisper", tStt == 1) { tStt = 1; vm.store.stt = 1 }
+                Chip("Deepgram", tStt == 2) { tStt = 2; vm.store.stt = 2 }
+            }
+            Label("Titles")
+            ChipRow {
+                Chip("Built-in", tTitle == 0) { tTitle = 0; vm.store.titleAi = 0 }
+                Chip("Groq Llama 3.3", tTitle == 1) { tTitle = 1; vm.store.titleAi = 1 }
+                Chip("Gemini", tTitle == 2) { tTitle = 2; vm.store.titleAi = 2 }
+            }
+            @Composable
+            fun KeyField(label: String, value: String, service: String, hint: String, onChange: (String) -> Unit) {
+                OutlinedTextField(
+                    value = value, onValueChange = onChange, singleLine = true,
+                    label = { Text(label) }, placeholder = { Text(hint, color = C.Mute) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(), colors = fieldColors(), shape = RoundedCornerShape(14.dp),
+                )
+                GhostButton("Test $label", Modifier.fillMaxWidth()) {
+                    testMsg = "Testing..."
+                    scope.launch { testMsg = label + ": " + withContext(Dispatchers.IO) { Cloud.test(service, value) } }
+                }
+            }
+            KeyField("Groq key", kGroq, "groq", "get it free at console.groq.com/keys") { kGroq = it; vm.store.groqKey = it }
+            KeyField("Deepgram key", kDg, "deepgram", "free credit at console.deepgram.com") { kDg = it; vm.store.deepgramKey = it }
+            KeyField("Gemini key", kGem, "gemini", "free at aistudio.google.com/apikey") { kGem = it; vm.store.geminiKey = it }
+            if (testMsg.isNotEmpty()) Text(testMsg, color = if (testMsg.endsWith("OK")) C.Good else C.Warn, fontSize = 13.sp)
         }
         Panel {
             Label("Problems? Send the log")

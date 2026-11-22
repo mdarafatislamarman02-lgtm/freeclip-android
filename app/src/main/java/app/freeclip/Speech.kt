@@ -8,6 +8,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.vosk.Model
@@ -25,6 +27,9 @@ import kotlin.math.min
 object Speech {
     private const val MODEL_NAME = "vosk-model-small-en-us-0.15"
     private const val MODEL_URL = "https://alphacephei.com/vosk/models/$MODEL_NAME.zip"
+
+    /** Cloud transcription with the person's own key (see [Cloud]). */
+    class CloudCfg(val stt: Cloud.Stt, val key: String)
 
     private fun modelDir(ctx: Context) = File(ctx.filesDir, "models/$MODEL_NAME")
 
@@ -118,28 +123,34 @@ object Speech {
         endS: Double,
         onStatus: (String, Float) -> Unit,
         maxParts: Int = 6,
+        cloud: CloudCfg? = null,
     ): Analysis = withContext(Dispatchers.Default) {
         val job = currentCoroutineContext()
 
-        onStatus("Preparing the speech model (first time only, a few seconds)...", 0f)
-        val dir = ensureModel(ctx) { onStatus("Preparing the speech model (first time only)...", it * 0.1f) }
-        job.ensureActive()
-
-        onStatus("Loading the speech model...", 0.1f)
-        val model = Model(dir.absolutePath)
+        var model: Model? = null
+        if (cloud == null) {
+            onStatus("Preparing the speech model (first time only, a few seconds)...", 0f)
+            val dir = ensureModel(ctx) { onStatus("Preparing the speech model (first time only)...", it * 0.1f) }
+            job.ensureActive()
+            onStatus("Loading the speech model...", 0.1f)
+            model = Model(dir.absolutePath)
+        } else {
+            onStatus("Sending the audio to ${cloud.stt.label}...", 0f)
+        }
         val hop = AudioDecoder.HOP / AudioDecoder.RATE.toDouble()
         val span = max(endS - startS, 1.0)
-        val parts = if (span < 120 || maxParts <= 1) 1 else (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, maxParts.coerceAtLeast(2))
+        val parts = if (cloud != null) kotlin.math.ceil(span / 480.0).toInt().coerceIn(1, 40) else if (span < 120 || maxParts <= 1) 1 else (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, maxParts.coerceAtLeast(2))
         val segLen = span / parts
         val prog = DoubleArray(parts)
-        fun report() = onStatus("Listening to the video...", 0.1f + 0.9f * (prog.sum() / parts).toFloat())
+        val gate = Semaphore(3)
+        fun report() = onStatus(if (cloud != null) "Transcribing with ${cloud.stt.label}..." else "Listening to the video...", 0.1f + 0.9f * (prog.sum() / parts).toFloat())
 
         class Part(val words: List<Word>, val baseS: Double, val rms: FloatArray)
 
         val results = try {
             coroutineScope {
                 (0 until parts).map { k ->
-                    async(Dispatchers.Default) {
+                    async(Dispatchers.Default) { gate.withPermit {
                         val keepLo = startS + k * segLen
                         val keepHi = if (k == parts - 1) endS + 1.0 else startS + (k + 1) * segLen
                         val from = max(startS, keepLo - 1.5)
@@ -152,7 +163,26 @@ object Speech {
                                 { ensureActive() },
                             )
                             val out = ArrayList<Word>()
-                            val rec = Recognizer(model, AudioDecoder.RATE.toFloat())
+                            if (cloud != null) {
+                                prog[k] = 0.35; report()
+                                val wavFile = File(ctx.cacheDir, "cloud_$k.wav")
+                                try {
+                                    Cloud.wav(pcm, wavFile)
+                                    val ws = Cloud.transcribe(cloud.stt, cloud.key, wavFile)
+                                    for (w in ws) {
+                                        val s0 = w.s + dec.baseS
+                                        val e0 = w.e + dec.baseS
+                                        val mid = (s0 + e0) / 2
+                                        if (mid >= keepLo && mid < keepHi) out.add(Word(w.w, s0, e0))
+                                    }
+                                } finally {
+                                    wavFile.delete()
+                                }
+                                prog[k] = 1.0
+                                report()
+                                return@withPermit Part(out, dec.baseS, dec.rms)
+                            }
+                            val rec = Recognizer(model!!, AudioDecoder.RATE.toFloat())
                             rec.setWords(true)
                             fun collect(json: String) {
                                 val arr = JSONObject(json).optJSONArray("result") ?: return
@@ -188,11 +218,11 @@ object Speech {
                         } finally {
                             pcm.delete()
                         }
-                    }
+                    } }
                 }.awaitAll()
             }
         } finally {
-            model.close()
+            model?.close()
         }
 
         val words = results.flatMap { it.words }.sortedBy { it.s }
