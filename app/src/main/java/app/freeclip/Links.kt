@@ -63,7 +63,7 @@ class AppDownloader : Downloader() {
 object Links {
     const val UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"
     private const val CHUNK = 10L * 1024 * 1024
-    private const val MAX_YT_SECONDS = 90 * 60
+    private const val MAX_YT_SECONDS = 15 * 3600
 
     class Result(val file: File, val title: String)
 
@@ -169,18 +169,32 @@ object Links {
             )
         }
         if (info.streamType != StreamType.VIDEO_STREAM) throw IllegalStateException("Live streams can't be imported. Use a finished video.")
-        if (info.duration > MAX_YT_SECONDS) throw IllegalStateException("That video is over 90 minutes, which is too long for a phone. Try a shorter one.")
+        if (info.duration > MAX_YT_SECONDS) throw IllegalStateException("That video is over 15 hours. Try a shorter one.")
+        // Longer videos are downloaded in lower quality so they fit on the phone and download faster.
+        val maxH = when {
+            info.duration <= 3600 -> 1080
+            info.duration <= 4 * 3600 -> 720
+            info.duration <= 8 * 3600 -> 480
+            else -> 360
+        }
 
         val prog = DeliveryMethod.PROGRESSIVE_HTTP
         val vo = info.videoOnlyStreams
-            .filter { it.deliveryMethod == prog && it.format == NpFormat.MPEG_4 && it.height in 1..1080 }
-            .maxByOrNull { it.height }
+            .filter { it.deliveryMethod == prog && it.format == NpFormat.MPEG_4 && it.height > 0 }
+            .let { l -> l.filter { it.height <= maxH }.maxByOrNull { it.height } ?: l.minByOrNull { it.height } }
         val au = info.audioStreams
             .filter { it.deliveryMethod == prog && it.format == NpFormat.M4A }
             .maxByOrNull { it.averageBitrate }
         val title = info.name ?: "YouTube video"
 
         if (vo != null && au != null) {
+            fun clen(u: String) = Uri.parse(u).getQueryParameter("clen")?.toLongOrNull() ?: 0L
+            val need = clen(vo.content) + clen(au.content)
+            if (need > 0 && dir.usableSpace < need * 2 + 200L * 1024 * 1024) {
+                throw IllegalStateException(
+                    "Not enough free space: this video needs about ${need * 2 / (1024 * 1024)} MB. Free some space and try again."
+                )
+            }
             val v = File(dir, "yt_video.mp4")
             val a = File(dir, "yt_audio.m4a")
             val out = File(dir, "yt_${System.currentTimeMillis() / 1000}.mp4")

@@ -115,7 +115,7 @@ object Speech {
         val words = ArrayList<Word>()
         try {
             val totalBytes = dec.samples * 2
-            val parts = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4)
+            val parts = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 6)
             val partBytes = ((totalBytes / parts) / 2) * 2
             val overlapBytes = AudioDecoder.RATE * 2L * 2 // 2 s of overlap so words on a cut are not lost
             val done = AtomicLong(0)

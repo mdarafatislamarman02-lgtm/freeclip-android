@@ -110,7 +110,8 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             videoName = name
             videoUri = uri
             rangeA = 0f
-            rangeB = durationS.toFloat()
+            // Long videos start with the first 30 minutes (much faster); slide the range to analyse more.
+            rangeB = if (durationS > 3600) 1800f else durationS.toFloat()
             analysis = null
             faceCache.clear()
             moments.clear()

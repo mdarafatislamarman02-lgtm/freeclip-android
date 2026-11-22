@@ -196,7 +196,13 @@ private fun ReadyCard(vm: MainVM, onPick: () -> Unit) {
         }
         RangeSlider(
             value = vm.rangeA..vm.rangeB,
-            onValueChange = { vm.rangeA = it.start; vm.rangeB = it.endInclusive },
+            onValueChange = {
+                var a = it.start
+                var b = it.endInclusive
+                val max = 3 * 3600f // one analysis covers at most 3 hours
+                if (b - a > max) { if (a != vm.rangeA) b = a + max else a = b - max }
+                vm.rangeA = a; vm.rangeB = b
+            },
             valueRange = 0f..vm.durationS.toFloat().coerceAtLeast(1f),
             colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = C.Violet, inactiveTrackColor = C.Line),
         )
@@ -206,7 +212,7 @@ private fun ReadyCard(vm: MainVM, onPick: () -> Unit) {
             Text(fmt(vm.rangeB.toDouble()), color = C.Ink, fontSize = 13.sp)
         }
         if (vm.rangeB - vm.rangeA > 25 * 60) {
-            Text("Long video: analysing a part of it (for example the busiest 10-15 minutes) is much faster.", color = C.Warn, fontSize = 12.sp)
+            Text("Long video: analysing 20-30 minutes at a time is fastest. Run it again with another range for more clips (max 3 hours per run).", color = C.Warn, fontSize = 12.sp)
         }
     }
 
