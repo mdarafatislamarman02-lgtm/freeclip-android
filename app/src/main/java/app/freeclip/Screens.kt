@@ -89,8 +89,9 @@ fun HomeScreen(vm: MainVM, onPick: () -> Unit) {
             }
         }
         vm.error?.let { Text(it, color = C.Bad, fontSize = 13.sp) }
+        JobBanner(vm)
 
-        if (vm.videoUri != null && vm.stage != Stage.PICK) {
+        if ((vm.videoUri != null || vm.audioUri != null) && vm.stage != Stage.PICK) {
             Panel {
                 Text("Continue with", color = C.Mute, fontSize = 12.sp)
                 Text(vm.videoName, fontWeight = FontWeight.Bold, color = C.Ink)
@@ -173,6 +174,7 @@ fun CreateScreen(vm: MainVM, onPick: () -> Unit) {
     ) {
         Text("Create", fontWeight = FontWeight.ExtraBold, fontSize = 24.sp, color = C.Ink)
         vm.error?.let { Text(it, color = C.Bad, fontSize = 13.sp) }
+        JobBanner(vm)
         when (vm.stage) {
             Stage.PICK -> SourceCard(vm, onPick)
             Stage.READY -> ReadyCard(vm, onPick)
@@ -184,9 +186,38 @@ fun CreateScreen(vm: MainVM, onPick: () -> Unit) {
     }
 }
 
+/** Shows the job state (Queued / Processing / Background Processing / Paused / Failed / Completed) and Resume / Retry. */
+@Composable
+fun JobBanner(vm: MainVM) {
+    val st = vm.jobState
+    if (st == JobState.IDLE) return
+    val col = when (st) {
+        JobState.FAILED -> C.Bad
+        JobState.PAUSED -> C.Warn
+        JobState.COMPLETED -> C.Good
+        else -> C.Cyan
+    }
+    Panel {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                st.label, color = col, fontWeight = FontWeight.ExtraBold, fontSize = 13.sp,
+                modifier = Modifier.clip(RoundedCornerShape(50)).background(col.copy(alpha = 0.15f)).padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+            Text(vm.videoName, color = C.Mute, fontSize = 12.sp, maxLines = 1, modifier = Modifier.weight(1f))
+        }
+        if (st == JobState.PAUSED) Text("The app was closed while this was running. Nothing already finished is redone.", color = C.Mute, fontSize = 12.sp)
+        if (st == JobState.BACKGROUND || st == JobState.PROCESSING) {
+            Text("You can minimise the app or turn the screen off. Progress shows in the notification.", color = C.Mute, fontSize = 12.sp)
+        }
+        if ((st == JobState.PAUSED || st == JobState.FAILED) && vm.resumeAction != Resume.NONE) {
+            GradButton(if (st == JobState.PAUSED) "Resume" else "Retry", Modifier.fillMaxWidth()) { vm.resume() }
+        }
+    }
+}
+
 @Composable
 private fun DownloadBanner(vm: MainVM) {
-    if (vm.videoReady) return
+    if (vm.videoReady || !vm.dlActive) return
     Panel {
         Text("Video downloading in the background: ${(vm.dlProgress * 100).toInt()}%", color = C.Cyan, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         LinearProgressIndicator(
@@ -319,7 +350,7 @@ private fun BusyPanel(vm: MainVM) = Panel {
         color = C.Violet, trackColor = C.Line,
     )
     Text(
-        "${(vm.progress * 100).toInt()}%" + (if (vm.eta.isNotEmpty()) "  -  ${vm.eta}" else "") + "  -  keep the app open.",
+        "${(vm.progress * 100).toInt()}%" + (if (vm.eta.isNotEmpty()) "  -  ${vm.eta}" else "") + "  -  keeps going if you leave the app.",
         color = C.Mute, fontSize = 13.sp,
     )
     if (vm.stage != Stage.RENDERING) {
@@ -353,6 +384,7 @@ private fun ReviewCard(vm: MainVM) {
                 ScorePill("Engagement", m.engagement)
             }
             Text(m.reasons.joinToString("  |  "), color = C.Cyan, fontSize = 12.sp)
+            ExportBadge(vm.exportStatus[m.id])
             Text(m.text.take(200) + if (m.text.length > 200) "..." else "", color = C.Mute, fontSize = 12.sp)
             GradButton("Edit and preview", Modifier.fillMaxWidth(), enabled = vm.videoReady) { vm.editIdx = i }
         }
@@ -363,10 +395,20 @@ private fun ReviewCard(vm: MainVM) {
             Chip("720p - fast", vm.res == 720) { vm.res = 720 }
             Chip("1080p - sharper", vm.res == 1080) { vm.res = 1080 }
         }
+        if (vm.exportStatus.values.any { it != "ok" } && vm.videoReady) {
+            GradButton("Retry failed clips", Modifier.fillMaxWidth()) { vm.saveDefaults(); vm.render(resume = true) }
+        }
         GradButton(if (vm.videoReady) "Export selected clips (MP4)" else "Waiting for the video...", Modifier.fillMaxWidth(), enabled = vm.videoReady) { vm.saveDefaults(); vm.render() }
         GhostButton("Change settings and re-analyse", Modifier.fillMaxWidth()) { vm.stage = Stage.READY }
         GhostButton("Start over", Modifier.fillMaxWidth()) { vm.startOver() }
     }
+}
+
+@Composable
+private fun ExportBadge(st: String?) {
+    if (st == null) return
+    if (st == "ok") Text("Exported and checked", color = C.Good, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    else Text("Export failed: ${st.removePrefix("fail: ")}", color = C.Bad, fontSize = 12.sp)
 }
 
 @Composable
@@ -380,8 +422,20 @@ private fun ScorePill(label: String, v: Int) {
 
 @Composable
 private fun DoneCard(vm: MainVM) {
-    Text("Saved to your Gallery in Movies/ClipForge, and listed in My Clips.", color = C.Mute, fontSize = 13.sp)
+    val failedMoments = vm.moments.filter { vm.exportStatus[it.id]?.startsWith("fail") == true }
+    if (vm.results.isNotEmpty()) {
+        Text("${vm.results.size} clips exported and checked. Saved in Movies/ClipForge and listed in My Clips.", color = C.Mute, fontSize = 13.sp)
+    }
     vm.results.forEach { ClipRow(it, vm, false) }
+    if (failedMoments.isNotEmpty()) {
+        Panel {
+            Text("${failedMoments.size} clip(s) failed", color = C.Bad, fontWeight = FontWeight.Bold)
+            failedMoments.forEach { m ->
+                Text("${m.title}: ${vm.exportStatus[m.id]?.removePrefix("fail: ")}", color = C.Mute, fontSize = 12.sp)
+            }
+            GradButton("Retry failed clips", Modifier.fillMaxWidth()) { vm.render(resume = true) }
+        }
+    }
     GradButton("Make more from this video", Modifier.fillMaxWidth()) { vm.backToReview() }
     GhostButton("New video", Modifier.fillMaxWidth()) { vm.startOver() }
 }
@@ -575,6 +629,14 @@ fun SettingsScreen(vm: MainVM) {
             Text("Downloaded videos and temporary files can be cleared any time. Exported clips stay in your Gallery.", color = C.Mute, fontSize = 12.sp)
             GhostButton("Clear temporary files", Modifier.fillMaxWidth()) { msg = vm.clearCache() }
             if (msg.isNotEmpty()) Text(msg, color = C.Good, fontSize = 13.sp)
+        }
+        Panel {
+            Label("Speed of your last job")
+            if (vm.timings.isEmpty()) Text("Nothing measured yet.", color = C.Mute, fontSize = 12.sp)
+            vm.timings["download"]?.let { Text("Download: ${it / 1000} s", color = C.Ink, fontSize = 13.sp) }
+            vm.timings["analyze"]?.let { Text("Listening and transcript: ${it / 1000} s", color = C.Ink, fontSize = 13.sp) }
+            vm.timings["export"]?.let { Text("Export, per clip: ${it / 1000} s", color = C.Ink, fontSize = 13.sp) }
+            Text("Send me these numbers if it is still slow, so the real bottleneck can be fixed.", color = C.Mute, fontSize = 11.sp)
         }
         Panel {
             Label("Privacy")

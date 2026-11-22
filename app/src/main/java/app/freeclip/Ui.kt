@@ -5,6 +5,8 @@ import android.view.TextureView
 import androidx.annotation.OptIn
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -102,39 +104,14 @@ fun fmt(sec: Double): String {
 
 // ---------------------------------------------------------------- logo
 
-/** ClipForge mark: a vertical clip frame with a play triangle, struck by an AI spark. */
+/** The ClipForge AI icon, exactly as supplied (res/drawable-nodpi/clipforge_logo.png). */
 @Composable
 fun LogoMark(size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
-        val u = this.size.width / 108f
-        drawRoundRect(C.Brand, size = this.size, cornerRadius = CornerRadius(26f * u))
-        // vertical 9:16 clip frame
-        drawRoundRect(
-            Color.White,
-            topLeft = Offset(36f * u, 26f * u),
-            size = Size(32f * u, 56f * u),
-            cornerRadius = CornerRadius(6f * u),
-            style = Stroke(width = 4.5f * u),
-        )
-        // play triangle
-        val tri = Path().apply {
-            moveTo(46f * u, 44f * u)
-            lineTo(62f * u, 54f * u)
-            lineTo(46f * u, 64f * u)
-            close()
-        }
-        drawPath(tri, Color.White)
-        // spark
-        val sp = Path().apply {
-            moveTo(72f * u, 14f * u)
-            cubicTo(73.5f * u, 22f * u, 77f * u, 26.5f * u, 86f * u, 28f * u)
-            cubicTo(77f * u, 29.5f * u, 73.5f * u, 34f * u, 72f * u, 42f * u)
-            cubicTo(70.5f * u, 34f * u, 67f * u, 29.5f * u, 58f * u, 28f * u)
-            cubicTo(67f * u, 26.5f * u, 70.5f * u, 22f * u, 72f * u, 14f * u)
-            close()
-        }
-        drawPath(sp, C.Gold)
-    }
+    Image(
+        painter = painterResource(R.drawable.clipforge_logo),
+        contentDescription = "ClipForge AI",
+        modifier = modifier.size(size).clip(RoundedCornerShape(size * 0.22f)),
+    )
 }
 
 @Composable

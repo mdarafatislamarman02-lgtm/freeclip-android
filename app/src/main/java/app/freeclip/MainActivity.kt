@@ -1,13 +1,17 @@
 package app.freeclip
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalContext
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -31,7 +35,6 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,12 +45,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
-    private val vm: MainVM by viewModels()
+    private val vm: MainVM get() = (application as ClipApp).vm
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,6 +68,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        vm.inBackground = false
+    }
+
+    override fun onStop() {
+        super.onStop()
+        vm.inBackground = true
+        vm.persist() // a running job keeps going (foreground service); this also saves edits for a later restart
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleShare(intent)
@@ -75,7 +88,7 @@ class MainActivity : ComponentActivity() {
     private fun handleShare(i: Intent?) {
         if (i?.action != Intent.ACTION_SEND) return
         val url = i.getStringExtra(Intent.EXTRA_TEXT)?.let { Links.extractUrl(it) } ?: return
-        if (!vm.busy) {
+        if (!vm.working) {
             if (vm.stage != Stage.PICK) vm.startOver()
             vm.linkText = url
             vm.tab = 0
@@ -110,13 +123,24 @@ private val NAV = listOf(
 
 @Composable
 private fun App(vm: MainVM) {
-    val view = LocalView.current
-    DisposableEffect(vm.busy) {
-        view.keepScreenOn = vm.busy
-        onDispose { view.keepScreenOn = false }
+    val ctx = LocalContext.current
+    // Screen-off is allowed: the foreground service keeps the work going, so the screen is NOT kept on.
+    val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { vm.onPicked(it) }
-    val pick = { picker.launch("video/*") }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            try {
+                ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {
+            }
+            vm.onPicked(uri)
+        }
+    }
+    val pick = { picker.launch(arrayOf("video/*")) }
 
     BackHandler(enabled = vm.editIdx >= 0 || vm.tab != 0) {
         if (vm.editIdx >= 0) vm.editIdx = -1 else vm.tab = 0

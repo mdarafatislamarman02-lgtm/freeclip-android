@@ -6,6 +6,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.AbsoluteSizeSpan
@@ -209,11 +210,21 @@ object Renderer {
                 })
                 .build()
 
+            var lastP = -1f
+            var lastT = SystemClock.elapsedRealtime()
             poll = Runnable {
                 if (transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
-                    onProgress(holder.progress / 100f)
+                    val p = holder.progress / 100f
+                    onProgress(p)
+                    if (p != lastP) { lastP = p; lastT = SystemClock.elapsedRealtime() }
                 }
-                handler.postDelayed(poll, 400)
+                if (SystemClock.elapsedRealtime() - lastT > 180_000) {
+                    // No progress for 3 minutes: stop instead of showing an endless spinner.
+                    transformer.cancel()
+                    if (cont.isActive) cont.resumeWithException(IllegalStateException("The export stalled and was stopped. Tap Retry."))
+                } else {
+                    handler.postDelayed(poll, 400)
+                }
             }
 
             if (out.exists()) out.delete()
