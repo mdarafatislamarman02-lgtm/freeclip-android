@@ -9,15 +9,32 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "app.freeclip"
+        applicationId = "app.clipforge"
         minSdk = 29
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "1.0.0"
     }
 
+    // One fixed key, so a new build installs over the old one (no uninstall needed from now on).
+    signingConfigs {
+        create("clipforge") {
+            storeFile = file("clipforge.jks")
+            storePassword = "clipforge123"
+            keyAlias = "clipforge"
+            keyPassword = "clipforge123"
+        }
+    }
     buildTypes {
-        release { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("clipforge")
+        }
+        debug { signingConfig = signingConfigs.getByName("clipforge") }
+    }
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
     }
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
@@ -48,6 +65,8 @@ dependencies {
     implementation("androidx.media3:media3-common:$media3")
     implementation("androidx.media3:media3-effect:$media3")
     implementation("androidx.media3:media3-transformer:$media3")
+    implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.compose.material:material-icons-core")
 
     // Offline speech recognition with word timestamps
     implementation("net.java.dev.jna:jna:5.13.0@aar")

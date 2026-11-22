@@ -1,0 +1,67 @@
+package app.freeclip
+
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+
+/** Small on-device storage: default settings and the list of finished clips. Nothing here leaves the phone. */
+class Store(ctx: Context) {
+    private val sp = ctx.getSharedPreferences("clipforge", Context.MODE_PRIVATE)
+    private val libFile = File(ctx.filesDir, "library.json")
+
+    var lengthIdx: Int
+        get() = sp.getInt("lengthIdx", 0)
+        set(v) { sp.edit().putInt("lengthIdx", v).apply() }
+
+    var ratioIdx: Int
+        get() = sp.getInt("ratioIdx", 0)
+        set(v) { sp.edit().putInt("ratioIdx", v).apply() }
+
+    var res: Int
+        get() = sp.getInt("res", 720)
+        set(v) { sp.edit().putInt("res", v).apply() }
+
+    var presetIdx: Int
+        get() = sp.getInt("presetIdx", 0)
+        set(v) { sp.edit().putInt("presetIdx", v).apply() }
+
+    var captions: Boolean
+        get() = sp.getBoolean("captions", true)
+        set(v) { sp.edit().putBoolean("captions", v).apply() }
+
+    var creator: String
+        get() = sp.getString("creator", "") ?: ""
+        set(v) { sp.edit().putString("creator", v).apply() }
+
+    fun loadLibrary(): List<LibraryClip> = try {
+        if (!libFile.exists()) emptyList() else {
+            val arr = JSONArray(libFile.readText())
+            (0 until arr.length()).map {
+                val o = arr.getJSONObject(it)
+                LibraryClip(
+                    o.getString("id"), o.getString("title"), o.getString("uri"),
+                    o.getDouble("seconds"), o.getLong("created"),
+                    o.optString("layout", ""), o.optInt("score", 0),
+                )
+            }
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    fun saveLibrary(list: List<LibraryClip>) {
+        try {
+            val arr = JSONArray()
+            for (c in list) {
+                arr.put(
+                    JSONObject().put("id", c.id).put("title", c.title).put("uri", c.uri)
+                        .put("seconds", c.seconds).put("created", c.created)
+                        .put("layout", c.layout).put("score", c.score)
+                )
+            }
+            libFile.writeText(arr.toString())
+        } catch (_: Exception) {
+        }
+    }
+}

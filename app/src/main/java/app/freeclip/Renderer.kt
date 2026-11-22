@@ -19,7 +19,6 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.OverlaySettings
-import androidx.media3.effect.Presentation
 import androidx.media3.effect.TextOverlay
 import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
@@ -47,6 +46,7 @@ class CueOverlay(
     private val cues: List<Cue>,
     private val sizePx: Int,
     private val settings: OverlaySettings,
+    private val preset: CaptionPreset,
 ) : TextOverlay() {
     private val cache = HashMap<Int, SpannableString>()
     private val blank = SpannableString(" ")
@@ -64,19 +64,29 @@ class CueOverlay(
         val all = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
         s.setSpan(AbsoluteSizeSpan(sizePx), 0, s.length, all)
         s.setSpan(StyleSpan(Typeface.BOLD), 0, s.length, all)
-        s.setSpan(ForegroundColorSpan(Color.WHITE), 0, s.length, all)
-        s.setSpan(BackgroundColorSpan(0x99000000.toInt()), 0, s.length, all)
+        s.setSpan(ForegroundColorSpan(preset.text), 0, s.length, all)
+        if (preset.bg != 0) s.setSpan(BackgroundColorSpan(preset.bg), 0, s.length, all)
         if (c.hlEnd > c.hlStart) {
-            s.setSpan(ForegroundColorSpan(0xFFFFD21F.toInt()), c.hlStart, c.hlEnd, all)
+            if (preset.hlBg != 0) s.setSpan(BackgroundColorSpan(preset.hlBg), c.hlStart, c.hlEnd, all)
+            else s.setSpan(ForegroundColorSpan(preset.hl), c.hlStart, c.hlEnd, all)
         }
         return s
     }
 }
 
-object Renderer {
-    const val OUT_W = 1080
-    const val OUT_H = 1920
+/** Everything that decides how a clip looks. Shared by the preview and the export. */
+class ExportSpec(
+    val layout: LayoutMode,
+    val ratio: Ratio,
+    val side: Int, // short side in pixels: 720 or 1080
+    val preset: CaptionPreset,
+    val captions: Boolean,
+    val showTitle: Boolean,
+    val face: FaceInfo,
+    val corner: Int,
+)
 
+object Renderer {
     /** Word-by-word caption cues, 1-3 words at a time, the active word highlighted. */
     fun captionCues(words: List<Word>, startS: Double, endS: Double, upper: Boolean): List<Cue> {
         val ws = words.filter { it.e > startS && it.s < endS }
@@ -128,7 +138,11 @@ object Renderer {
         return lines.take(2).joinToString("\n")
     }
 
-    /** Cuts [startS, endS] from [uri], crops to 9:16 (1080x1920) and burns in captions/title. */
+    /** Normalised (-1..1, y up) vertical position of the captions. */
+    fun captionY(spec: ExportSpec): Float =
+        if (spec.layout == LayoutMode.GAMING) 1f - 2f * Faces.split(spec.ratio) else -0.30f
+
+    /** Cuts [startS, endS] from [uri], lays it out and burns in captions/title. */
     @OptIn(UnstableApi::class)
     suspend fun export(
         ctx: Context,
@@ -137,8 +151,7 @@ object Renderer {
         endS: Double,
         words: List<Word>,
         title: String,
-        showTitle: Boolean,
-        uppercase: Boolean,
+        spec: ExportSpec,
         out: File,
         onProgress: (Float) -> Unit,
     ) = withContext(Dispatchers.Main) {
@@ -149,30 +162,32 @@ object Renderer {
                 .build()
             val item = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip).build()
 
+            val layoutFx = LayoutEffect.create(spec.layout, spec.ratio, spec.side, spec.face, spec.corner)
+            val scale = layoutFx.outW / 1080f
             val overlays = ArrayList<TextureOverlay>()
-            val cues = captionCues(words, startS, endS, uppercase)
+            val cues = if (spec.captions) captionCues(words, startS, endS, spec.preset.upper) else emptyList()
             if (cues.isNotEmpty()) {
-                val s = OverlaySettings.Builder().setBackgroundFrameAnchor(0f, -0.28f).build()
-                overlays.add(CueOverlay(cues, 66, s))
+                val s = OverlaySettings.Builder().setBackgroundFrameAnchor(0f, captionY(spec)).build()
+                overlays.add(CueOverlay(cues, (spec.preset.size * 0.85f * scale).toInt(), s, spec.preset))
             }
-            if (showTitle && title.isNotBlank()) {
-                val s = OverlaySettings.Builder().setBackgroundFrameAnchor(0f, 0.72f).build()
+            if (spec.showTitle && title.isNotBlank()) {
+                val s = OverlaySettings.Builder().setBackgroundFrameAnchor(0f, 0.80f).build()
                 val t = wrapTitle(title)
-                overlays.add(CueOverlay(listOf(Cue(0, 3_000_000, t, 0, 0)), 56, s))
+                overlays.add(CueOverlay(listOf(Cue(0, 3_000_000, t, 0, 0)), (56 * scale).toInt(), s, PRESETS[0]))
             }
 
             val videoEffects = ArrayList<Effect>()
-            videoEffects.add(Presentation.createForWidthAndHeight(OUT_W, OUT_H, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
+            videoEffects.add(layoutFx)
             if (overlays.isNotEmpty()) videoEffects.add(OverlayEffect(ImmutableList.copyOf(overlays)))
 
             val edited = EditedMediaItem.Builder(item)
                 .setEffects(Effects(emptyList(), videoEffects))
                 .build()
 
+            val bitrate = if (spec.side >= 1080) 8_000_000 else 5_000_000
             val encoder = DefaultEncoderFactory.Builder(ctx)
-                .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(8_000_000).build())
+                .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
                 .build()
-
             val handler = Handler(Looper.getMainLooper())
             val holder = ProgressHolder()
             lateinit var poll: Runnable

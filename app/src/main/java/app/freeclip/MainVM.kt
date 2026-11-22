@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ContentValues
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -20,9 +21,11 @@ import java.io.File
 
 enum class Stage { PICK, DOWNLOADING, READY, ANALYZING, REVIEW, RENDERING, DONE }
 
-class LengthOption(val label: String, val min: Double, val max: Double)
-
 class MainVM(app: Application) : AndroidViewModel(app) {
+    val store = Store(app)
+
+    /** 0 Home, 1 Create, 2 My Clips, 3 Templates, 4 Settings */
+    var tab by mutableStateOf(0)
     var stage by mutableStateOf(Stage.PICK)
     var linkText by mutableStateOf("")
     var videoUri by mutableStateOf<Uri?>(null)
@@ -31,33 +34,63 @@ class MainVM(app: Application) : AndroidViewModel(app) {
     var videoAspect by mutableStateOf(16f / 9f)
     var status by mutableStateOf("")
     var progress by mutableStateOf(0f)
+    var eta by mutableStateOf("")
     var stepIdx by mutableStateOf(0)
     var error by mutableStateOf<String?>(null)
-    var previewIdx by mutableStateOf(-1)
+    var editIdx by mutableStateOf(-1)
 
-    val lengths = listOf(
-        LengthOption("Short 15-30s", 15.0, 30.0),
-        LengthOption("Medium 25-50s", 25.0, 50.0),
-        LengthOption("Long 45-90s", 45.0, 90.0),
-    )
-    var lengthIdx by mutableStateOf(1)
+    // analysis window ("Adjust range")
+    var rangeA by mutableStateOf(0f)
+    var rangeB by mutableStateOf(0f)
+
+    // what to make
+    var prompt by mutableStateOf("")
+    var lengthIdx by mutableStateOf(store.lengthIdx.coerceIn(0, LENGTHS.size - 1))
     var nClips by mutableStateOf(5)
-    var captions by mutableStateOf(true)
-    var uppercase by mutableStateOf(true)
+    var ratio by mutableStateOf(Ratio.values()[store.ratioIdx.coerceIn(0, Ratio.values().size - 1)])
+    var layout by mutableStateOf(LayoutMode.FILL)
+    var corner by mutableStateOf(4)
+    var presetIdx by mutableStateOf(store.presetIdx.coerceIn(0, PRESETS.size - 1))
+    var captions by mutableStateOf(store.captions)
     var showTitle by mutableStateOf(false)
+    var res by mutableStateOf(store.res)
 
     val moments = mutableStateListOf<Moment>()
-    val results = mutableStateListOf<ClipResult>()
+    val results = mutableStateListOf<LibraryClip>()
+    val library = mutableStateListOf<LibraryClip>()
 
     private var analysis: Analysis? = null
     private var job: Job? = null
+    private val faceCache = HashMap<String, FaceInfo>()
     private val ctx: Application get() = getApplication<Application>()
 
     val busy get() = stage == Stage.ANALYZING || stage == Stage.RENDERING || stage == Stage.DOWNLOADING
+    val preset get() = PRESETS[presetIdx]
+
+    init {
+        library.addAll(store.loadLibrary())
+    }
+
+    fun saveDefaults() {
+        store.lengthIdx = lengthIdx
+        store.ratioIdx = ratio.ordinal
+        store.presetIdx = presetIdx
+        store.captions = captions
+        store.res = res
+    }
+
+    fun applyTemplate(t: Template) {
+        lengthIdx = t.lengthIdx
+        nClips = t.count
+        layout = t.layout
+        ratio = t.ratio
+        presetIdx = t.preset
+        prompt = t.prompt
+        tab = 1
+    }
 
     // ------------------------------------------------------------ get a video (upload or link)
 
-    /** Opens a video that is already on the phone. Returns false (and sets [error]) if it can't be read. */
     private fun openLocal(uri: Uri, name: String): Boolean {
         return try {
             val r = MediaMetadataRetriever()
@@ -76,11 +109,15 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             }
             videoName = name
             videoUri = uri
+            rangeA = 0f
+            rangeB = durationS.toFloat()
             analysis = null
+            faceCache.clear()
             moments.clear()
             results.clear()
             error = null
             stage = Stage.READY
+            tab = 1
             true
         } catch (e: Exception) {
             error = "Could not open that video: ${e.message}"
@@ -99,7 +136,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         openLocal(uri, name)
     }
 
-    /** "Get clips in 1 click": download the link, then analyze straight away. */
+    /** "Generate clips": download the link, then wait on the options screen. */
     fun getClips() {
         val url = Links.extractUrl(linkText.trim())
         if (url == null) {
@@ -107,9 +144,11 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             return
         }
         error = null
+        tab = 1
         stage = Stage.DOWNLOADING
         stepIdx = 0
         progress = 0f
+        eta = ""
         status = "Getting the video..."
         job = viewModelScope.launch {
             try {
@@ -117,7 +156,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                     status = msg
                     progress = p
                 }
-                if (openLocal(Uri.fromFile(r.file), r.title)) analyze()
+                openLocal(Uri.fromFile(r.file), r.title)
             } catch (e: CancellationException) {
                 stage = Stage.PICK
                 throw e
@@ -136,23 +175,30 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         stage = Stage.ANALYZING
         stepIdx = 1
         progress = 0f
+        eta = ""
+        val t0 = SystemClock.elapsedRealtime()
         job = viewModelScope.launch {
             try {
-                val a = Speech.analyze(ctx, uri, (durationS * 1e6).toLong()) { msg, p ->
+                val a = Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble()) { msg, p ->
                     status = msg
                     progress = p
+                    if (p > 0.32f) {
+                        val el = (SystemClock.elapsedRealtime() - t0) / 1000.0
+                        val left = el * (1 - p) / p
+                        eta = if (left < 60) "about ${left.toInt() + 1} s left" else "about ${(left / 60).toInt() + 1} min left"
+                    }
                 }
                 analysis = a
                 stepIdx = 2
                 status = "Finding interesting moments..."
-                val len = lengths[lengthIdx]
-                val found = Moments.find(a.words, a.energy, a.hop, durationS, nClips, len.min, len.max)
+                val len = LENGTHS[lengthIdx]
+                val found = Moments.find(a.words, a.energy, a.hop, durationS, nClips, len.min, len.max, Moments.keywords(prompt))
                 stepIdx = 3
                 status = "Ranking the clips..."
                 moments.clear()
                 moments.addAll(found)
                 if (found.isEmpty()) {
-                    error = "No clear speech was found in this video. Try a video with talking, in English."
+                    error = "No clear speech was found in this part of the video. Try a different range, or a video with talking in English."
                     stage = Stage.READY
                 } else {
                     stage = Stage.REVIEW
@@ -177,13 +223,27 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         moments[i] = moments[i].copy(title = t)
     }
 
-    /** Nudge a clip's start/end by whole seconds, keeping it inside the video and at least 5 s long. */
+    /** Nudge a clip's start/end by seconds, keeping it inside the video and at least 5 s long. */
     fun trim(i: Int, dStart: Double, dEnd: Double) {
         val m = moments[i]
         val s = (m.start + dStart).coerceIn(0.0, durationS)
         val e = (m.end + dEnd).coerceIn(0.0, durationS)
         if (e - s >= 5.0) moments[i] = m.copy(start = s, end = e)
     }
+
+    fun wordsFor(m: Moment): List<Word> = analysis?.words ?: emptyList()
+
+    /** Where the speaker / facecam is in this clip (cached; runs off the main thread). */
+    suspend fun faceFor(m: Moment): FaceInfo {
+        val uri = videoUri ?: return FaceInfo.NONE
+        val key = "${m.id}_${m.start.toInt()}_${m.end.toInt()}"
+        faceCache[key]?.let { return it }
+        val f = withContext(Dispatchers.IO) { Faces.analyze(ctx, uri, m.start, m.end, videoAspect) }
+        faceCache[key] = f
+        return f
+    }
+
+    fun specFor(face: FaceInfo) = ExportSpec(layout, ratio, res, preset, captions, showTitle, face, corner)
 
     // ------------------------------------------------------------ export
 
@@ -196,21 +256,35 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             return
         }
         error = null
-        previewIdx = -1
+        editIdx = -1
         stage = Stage.RENDERING
         progress = 0f
+        eta = ""
+        results.clear()
+        val t0 = SystemClock.elapsedRealtime()
         job = viewModelScope.launch {
             try {
                 for ((n, m) in todo.withIndex()) {
-                    status = "Clip ${n + 1} of ${todo.size}: crop 9:16, captions, MP4"
+                    status = "Clip ${n + 1} of ${todo.size}: ${layout.label} layout, ${ratio.label}, captions"
+                    val face = if (layout == LayoutMode.FILL || layout.needsCam) faceFor(m) else FaceInfo.NONE
                     val tmp = File(ctx.cacheDir, "clip_${m.id}.mp4")
-                    Renderer.export(
-                        ctx, uri, m.start, m.end,
-                        if (captions) words else emptyList(),
-                        m.title, showTitle, uppercase, tmp,
-                    ) { p -> progress = (n + p) / todo.size }
+                    Renderer.export(ctx, uri, m.start, m.end, words, m.title, specFor(face), tmp) { p ->
+                        progress = (n + p) / todo.size
+                        if (progress > 0.05f) {
+                            val el = (SystemClock.elapsedRealtime() - t0) / 1000.0
+                            val left = el * (1 - progress) / progress
+                            eta = if (left < 60) "about ${left.toInt() + 1} s left" else "about ${(left / 60).toInt() + 1} min left"
+                        }
+                    }
                     val saved = withContext(Dispatchers.IO) { saveToGallery(tmp, m.title) }
-                    results.add(ClipResult(m.title, saved.toString(), m.end - m.start))
+                    val clip = LibraryClip(
+                        id = System.currentTimeMillis().toString() + "_" + m.id,
+                        title = m.title, uri = saved.toString(), seconds = m.end - m.start,
+                        created = System.currentTimeMillis(), layout = layout.label, score = m.score,
+                    )
+                    results.add(clip)
+                    library.add(0, clip)
+                    store.saveLibrary(library.toList())
                     tmp.delete()
                 }
                 progress = 1f
@@ -229,9 +303,9 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         val resolver = ctx.contentResolver
         val safe = title.replace(Regex("[^A-Za-z0-9 ]"), "").trim().take(30).ifEmpty { "clip" }
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, "FreeClip_${System.currentTimeMillis() / 1000}_$safe.mp4")
+            put(MediaStore.Video.Media.DISPLAY_NAME, "ClipForge_${System.currentTimeMillis() / 1000}_$safe.mp4")
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/FreeClip")
+            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/ClipForge")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
@@ -241,6 +315,19 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         values.put(MediaStore.Video.Media.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
         return uri
+    }
+
+    fun removeFromLibrary(c: LibraryClip) {
+        library.remove(c)
+        store.saveLibrary(library.toList())
+    }
+
+    fun clearCache(): String {
+        var n = 0L
+        for (d in listOf(ctx.cacheDir, File(ctx.filesDir, "downloads"))) {
+            d.listFiles()?.forEach { f -> n += f.length(); f.deleteRecursively() }
+        }
+        return "Freed ${n / (1024 * 1024)} MB"
     }
 
     fun cancel() {
@@ -257,7 +344,8 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         moments.clear()
         results.clear()
         analysis = null
+        faceCache.clear()
         error = null
-        previewIdx = -1
+        editIdx = -1
     }
 }

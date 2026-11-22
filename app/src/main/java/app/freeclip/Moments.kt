@@ -66,6 +66,29 @@ object Moments {
         return out
     }
 
+    private val STOP = setOf(
+        "find", "the", "best", "most", "moments", "moment", "clips", "clip", "with", "and", "that", "for", "all",
+        "make", "suitable", "strong", "first", "seconds", "second", "a", "an", "of", "in", "to", "on", "from",
+        "this", "video", "good", "great", "any", "some", "me", "my", "show", "give", "get", "where", "when",
+    )
+
+    /** Words from the user's prompt that a clip should mention (e.g. "funny", "money", "crash"). */
+    fun keywords(prompt: String): Set<String> =
+        WORD.findAll(prompt.lowercase()).map { it.value }.filter { it.length >= 4 && it !in STOP }.map { it.take(6) }.toSet()
+
+    /** A short headline: the most hook-like sentence of the clip, at most 8 words. */
+    private fun makeTitle(win: List<Sentence>): String {
+        val best = win.maxByOrNull { s ->
+            val l = s.text.lowercase()
+            (if (HOOK_STARTS.any { l.startsWith(it) }) 3 else 0) +
+                WORD.findAll(l).count { it.value in EMOTIVE } * 2 +
+                (if (s.words.size in 4..14) 1 else 0)
+        } ?: win.first()
+        val ws = best.words.map { it.w }
+        val t = ws.take(8).joinToString(" ").replaceFirstChar { it.uppercase() }
+        return if (ws.size > 8) "$t..." else t
+    }
+
     private fun clip01(x: Double) = max(0.0, min(1.0, x))
 
     private fun energyBetween(energy: FloatArray, hop: Double, a: Double, b: Double): Pair<Double, Double> {
@@ -80,7 +103,7 @@ object Moments {
         return mean to p90
     }
 
-    private fun score(win: List<Sentence>, energy: FloatArray, hop: Double): Cand {
+    private fun score(win: List<Sentence>, energy: FloatArray, hop: Double, kw: Set<String>): Cand {
         val words = win.flatMap { it.words }
         val low = win.joinToString(" ") { it.text }.lowercase()
         val dur = win.last().end - win.first().start
@@ -109,7 +132,13 @@ object Moments {
 
         f["clean"] = if (BAD_STARTS.any { low.startsWith(it) }) 0.5 else 1.0
 
-        val score = WEIGHTS.entries.sumOf { (k, w) -> f.getValue(k) * w } * 100
+        var score = WEIGHTS.entries.sumOf { (k, w) -> f.getValue(k) * w } * 100
+        if (kw.isNotEmpty()) {
+            val hits = WORD.findAll(low).map { it.value }.toSet().count { w -> kw.any { k -> w.startsWith(k) } }
+            val m = clip01(hits / max(1.0, min(3.0, kw.size.toDouble())))
+            f["match"] = m
+            score = score * 0.7 + m * 30
+        }
         return Cand(score, f, win)
     }
 
@@ -121,6 +150,7 @@ object Moments {
         nClips: Int,
         minLen: Double,
         maxLen: Double,
+        kw: Set<String> = emptySet(),
     ): List<Moment> {
         val sents = sentences(words)
         if (sents.isEmpty()) return emptyList()
@@ -136,14 +166,14 @@ object Moments {
                 if (jLong < 0 && dur >= (minLen + maxLen) / 2) jLong = j
             }
             for (j in listOf(jShort, jLong).distinct()) {
-                if (j >= 0) cands.add(score(sents.subList(i, j + 1), energy, hop))
+                if (j >= 0) cands.add(score(sents.subList(i, j + 1), energy, hop, kw))
             }
         }
         if (cands.isEmpty()) {
             // Video shorter than the minimum length: offer the speech as one clip.
             var j = 0
             while (j + 1 < sents.size && sents[j + 1].end - sents[0].start <= maxLen) j++
-            if (sents[j].end - sents[0].start >= 5) cands.add(score(sents.subList(0, j + 1), energy, hop))
+            if (sents[j].end - sents[0].start >= 5) cands.add(score(sents.subList(0, j + 1), energy, hop, kw))
         }
         cands.sortByDescending { it.score }
 
@@ -153,18 +183,21 @@ object Moments {
             val b = c.win.last().end
             val overlaps = chosen.any { min(b, it.end) - max(a, it.start) > 0.15 * (b - a) }
             if (overlaps) continue
-            val top = c.feats.entries.sortedByDescending { it.value }.take(3)
-                .filter { it.value >= 0.5 }.map { REASONS.getValue(it.key) }
-            val first = c.win.first().text
+            val top = c.feats.entries.filter { it.key != "match" }.sortedByDescending { it.value }.take(3)
+                .filter { it.value >= 0.5 }.map { REASONS.getValue(it.key) }.toMutableList()
+            if ((c.feats["match"] ?: 0.0) >= 0.5) top.add(0, "matches your prompt")
+            val f = c.feats
             chosen.add(
                 Moment(
                     id = chosen.size,
                     start = max(a - 0.25, 0.0),
                     end = min(b + 0.45, durationS),
                     score = c.score.toInt().coerceIn(0, 99),
-                    title = first.replaceFirstChar { it.uppercase() }.take(60),
+                    title = makeTitle(c.win),
                     text = c.win.joinToString(" ") { it.text },
                     reasons = top.ifEmpty { listOf("steady, complete passage") },
+                    hook = (f.getValue("hook") * 100).toInt().coerceIn(0, 99),
+                    engagement = ((f.getValue("emotion") + f.getValue("energy") + f.getValue("pace")) / 3 * 100).toInt().coerceIn(0, 99),
                 )
             )
             if (chosen.size >= nClips) break
