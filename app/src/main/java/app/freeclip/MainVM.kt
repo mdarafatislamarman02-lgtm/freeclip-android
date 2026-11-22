@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -69,6 +70,13 @@ class MainVM(app: Application) : AndroidViewModel(app) {
     val exportStatus = mutableStateMapOf<Int, String>() // moment id -> "ok" | "fail: reason"
     val timings = mutableStateMapOf<String, Long>() // "download" | "analyze" | "export" -> milliseconds
 
+    /** The real step the job is in: Fetching video, Downloading video, Analyzing video, Detecting viral moments, Generating clips, Rendering clips, Saving clips, Completed, Failed. */
+    var phase by mutableStateOf("")
+    /** SystemClock.elapsedRealtime() when the current job started; the screen shows the elapsed time from it. */
+    var jobStartMs by mutableStateOf(0L)
+    var notice by mutableStateOf<String?>(null)
+    var libraryMsg by mutableStateOf<String?>(null)
+
     // analysis window ("Adjust range")
     var rangeA by mutableStateOf(0f)
     var rangeB by mutableStateOf(0f)
@@ -96,6 +104,10 @@ class MainVM(app: Application) : AndroidViewModel(app) {
     private var dlJob: Job? = null
     private var active = 0
     private var jobUrl = ""
+    private var lastProgressMs = 0L
+    private var lastSig = ""
+    private var stallMsg: String? = null
+    private var watchdog: Job? = null
     private val faceCache = HashMap<String, FaceInfo>()
     private val ctx: Application get() = getApplication<Application>()
 
@@ -116,11 +128,19 @@ class MainVM(app: Application) : AndroidViewModel(app) {
     init {
         library.addAll(store.loadLibrary())
         restore()
+        refreshLibrary()
     }
 
     // ------------------------------------------------------------ background service + notification
 
     private fun begin() {
+        if (active == 0) {
+            jobStartMs = SystemClock.elapsedRealtime()
+            lastProgressMs = jobStartMs
+            lastSig = ""
+            stallMsg = null
+            startWatchdog()
+        }
         active++
         queued = false
         ClipService.start(ctx)
@@ -128,13 +148,71 @@ class MainVM(app: Application) : AndroidViewModel(app) {
 
     private fun end() {
         active = maxOf(0, active - 1)
-        if (active == 0) ClipService.stop(ctx)
+        if (active == 0) {
+            watchdog?.cancel()
+            ClipService.stop(ctx)
+        }
     }
 
     private fun report(msg: String, p: Float) {
         status = msg
         progress = p
+        touch("$msg|${(p * 10000).toInt()}")
         ClipService.update(ctx, msg, (p * 100).toInt())
+    }
+
+    /** Remembers that something really changed (used to detect a job that has stopped making progress). */
+    private fun touch(sig: String) {
+        if (sig != lastSig) {
+            lastSig = sig
+            lastProgressMs = SystemClock.elapsedRealtime()
+        }
+    }
+
+    private fun startWatchdog() {
+        watchdog?.cancel()
+        watchdog = scope.launch {
+            while (true) {
+                delay(10_000)
+                if (active == 0) break
+                val idle = SystemClock.elapsedRealtime() - lastProgressMs
+                if (idle > STALL_MS) {
+                    onStall(idle)
+                    break
+                }
+            }
+        }
+    }
+
+    /** No change for several minutes: stop the step, say so, and offer Retry (finished work is kept). */
+    private fun onStall(idleMs: Long) {
+        val msg = "No progress for ${idleMs / 60000} minutes during \"${phase.ifEmpty { status }}\", so this step was stopped. Tap Retry (finished work is kept)."
+        Diag.log(ctx, "STALL phase=$phase status=$status stage=$stage")
+        stallMsg = msg
+        val a = when {
+            stage == Stage.RENDERING -> Resume.EXPORT
+            stage == Stage.ANALYZING -> Resume.ANALYZE
+            else -> Resume.DOWNLOAD
+        }
+        job?.cancel()
+        dlJob?.cancel()
+        // Make the screen correct even if a native call ignores the cancel.
+        error = msg
+        failed = true
+        paused = false
+        resumeAction = a
+        stage = when (stage) {
+            Stage.RENDERING -> if (results.isEmpty()) Stage.REVIEW else Stage.DONE
+            Stage.ANALYZING -> Stage.READY
+            Stage.DOWNLOADING -> if (audioUri != null) Stage.READY else Stage.PICK
+            else -> stage
+        }
+        phase = "Failed"
+        dlActive = false
+        active = 0
+        ClipService.stop(ctx)
+        ClipService.done(ctx, "Stopped: no progress", "Open ClipForge AI and tap Retry.")
+        persist()
     }
 
     private fun etaText(startMs: Long, p: Float): String {
@@ -387,6 +465,8 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         progress = 0f
         eta = ""
         status = "Getting the video..."
+        phase = "Fetching video"
+        notice = null
         dlProgress = 0f
         queued = true
         val t0 = SystemClock.elapsedRealtime()
@@ -394,21 +474,50 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         dlJob = scope.launch {
             begin()
             try {
-                val r = Links.fetch(
-                    ctx, url,
-                    { msg, p -> report(msg, p) },
-                    early = { f, title, dur -> scope.launch { openAudioFirst(f, title, dur) } },
-                    onVideo = { dlProgress = it; ClipService.update(ctx, "Downloading the video...", (it * 100).toInt()) },
-                )
+                Diag.log(ctx, "FETCH start $url")
+                var r: Links.Result? = null
+                for (attempt in 1..2) {
+                    try {
+                        r = Links.fetch(
+                            ctx, url,
+                            { msg, p ->
+                                if (msg.contains("ownload", ignoreCase = true)) phase = "Downloading video"
+                                report(msg, p)
+                            },
+                            early = { f, title, dur -> phase = "Downloading video"; scope.launch { openAudioFirst(f, title, dur) } },
+                            onVideo = {
+                                dlProgress = it
+                                touch("v${(it * 10000).toInt()}")
+                                ClipService.update(ctx, "Downloading the video...", (it * 100).toInt())
+                            },
+                        )
+                        break
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: java.io.IOException) {
+                        Diag.log(ctx, "FETCH attempt $attempt failed", e)
+                        if (attempt == 2) throw e
+                        report("Connection problem, trying again...", 0f)
+                        delay(3000)
+                    }
+                }
+                val got = r!!
                 timings["download"] = SystemClock.elapsedRealtime() - t0
-                if (audioUri != null && !videoReady) attachVideo(r.file) else openLocal(Uri.fromFile(r.file), r.title)
+                Diag.log(ctx, "FETCH done ${got.file.length() / 1024} KB in ${timings["download"]} ms")
+                if (audioUri != null && !videoReady) attachVideo(got.file) else openLocal(Uri.fromFile(got.file), got.title)
+                phase = "Ready"
                 persist()
             } catch (e: CancellationException) {
-                if (audioUri == null) stage = Stage.PICK
+                if (stallMsg == null) {
+                    if (audioUri == null) stage = Stage.PICK
+                    phase = ""
+                }
                 throw e
             } catch (e: Throwable) {
+                Diag.log(ctx, "FETCH failed", e)
                 error = (e.message ?: e.toString()) + if (audioUri != null) " The video download stopped; tap Resume to try again." else ""
                 failed = true
+                phase = "Failed"
                 resumeAction = Resume.DOWNLOAD
                 if (audioUri == null) stage = Stage.PICK
                 persist()
@@ -468,6 +577,8 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         paused = false
         resumeAction = Resume.NONE
         stage = Stage.ANALYZING
+        phase = "Analyzing video"
+        notice = null
         stepIdx = 1
         progress = 0f
         eta = ""
@@ -482,10 +593,21 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                     report("Using the transcript you already have...", 1f)
                     analysis!!
                 } else {
-                    Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble()) { msg, p ->
+                    val onStatus: (String, Float) -> Unit = { msg, p ->
                         report(msg, p)
                         if (p > 0.32f) eta = etaText(t0, p)
-                    }.also {
+                    }
+                    val tr = try {
+                        Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble(), onStatus)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        // The parallel path failed on this phone: use the plain single-pass transcription instead.
+                        Diag.log(ctx, "ANALYZE parallel failed, retrying single part", e)
+                        report("Retrying with the simple method...", 0f)
+                        Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble(), onStatus, maxParts = 1)
+                    }
+                    tr.also {
                         analysis = it
                         analysisA = rangeA
                         analysisB = rangeB
@@ -494,29 +616,39 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 stepIdx = 2
+                phase = "Detecting viral moments"
                 report("Finding interesting moments...", 1f)
                 val len = LENGTHS[lengthIdx]
                 val found = Moments.find(a.words, a.energy, a.hop, durationS, nClips, len.min, len.max, Moments.keywords(prompt))
                 stepIdx = 3
+                phase = "Generating clips"
                 report("Ranking the clips...", 1f)
                 exportStatus.clear()
                 results.clear()
                 moments.clear()
                 moments.addAll(found)
+                Diag.log(ctx, "ANALYZE done words=${a.words.size} moments=${found.size}")
                 if (found.isEmpty()) {
-                    error = "No clear speech was found in this part of the video. Try a different range, or a video with talking in English."
+                    error = "No clear speech was found in this part of the video (${a.words.size} words heard). Try a different range, or a video with talking in English."
+                    phase = "Failed"
                     stage = Stage.READY
                 } else {
+                    phase = "Clips ready to review"
                     stage = Stage.REVIEW
                     ClipService.done(ctx, "Clips found", "${found.size} clips are ready to review.")
                 }
                 persist()
             } catch (e: CancellationException) {
-                stage = Stage.READY
-                persist()
+                if (stallMsg == null) {
+                    stage = Stage.READY
+                    phase = ""
+                    persist()
+                }
                 throw e
             } catch (e: Throwable) {
-                error = "Analysis failed: ${e.message ?: e}"
+                Diag.log(ctx, "ANALYZE failed", e)
+                phase = "Failed"
+                error = "Analysis failed: ${e.javaClass.simpleName}: ${e.message ?: e}"
                 failed = true
                 resumeAction = Resume.ANALYZE
                 stage = Stage.READY
@@ -592,6 +724,8 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         resumeAction = Resume.NONE
         editIdx = -1
         stage = Stage.RENDERING
+        phase = "Rendering clips"
+        notice = null
         progress = 0f
         eta = ""
         queued = true
@@ -600,6 +734,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         job = scope.launch {
             begin()
             try {
+                var simpleCount = 0
                 val hasAudio = withContext(Dispatchers.IO) { ExportCheck.sourceHasAudio(ctx, uri) }
                 for ((n, m) in todo.withIndex()) {
                     report("Clip ${n + 1} of ${todo.size}: ${layout.label}, ${ratio.label}, ${res}p", n.toFloat() / todo.size)
@@ -609,8 +744,18 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                         val tmp = File(ctx.cacheDir, "clip_${m.id}.mp4")
                         try {
                             tmp.delete()
-                            val face = if (layout == LayoutMode.FILL || layout.needsCam) faceFor(m) else FaceInfo.NONE
-                            Renderer.export(ctx, uri, m.start, m.end, words, m.title, specFor(face), tmp) { p ->
+                            phase = "Rendering clips"
+                            val face = try {
+                                if (layout == LayoutMode.FILL || layout.needsCam) faceFor(m) else FaceInfo.NONE
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Throwable) {
+                                Diag.log(ctx, "FACE failed (using centre crop)", e)
+                                FaceInfo.NONE
+                            }
+                            // Attempt 1: the full layout. Attempt 2: the plain centre-crop path that worked in the first version.
+                            val simple = attempt == 2
+                            Renderer.export(ctx, uri, m.start, m.end, words, m.title, specFor(face), tmp, safe = simple) { p ->
                                 val all = (n + p) / todo.size
                                 report("Clip ${n + 1} of ${todo.size}: ${layout.label}, ${ratio.label}, ${res}p", all)
                                 if (all > 0.05f) eta = etaText(t0, all)
@@ -618,7 +763,10 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                             report("Checking clip ${n + 1} of ${todo.size}...", (n + 1f) / todo.size)
                             val chk = withContext(Dispatchers.IO) { ExportCheck.verify(tmp, m.end - m.start, hasAudio) }
                             if (!chk.ok) throw IllegalStateException(chk.message)
+                            phase = "Saving clips"
+                            report("Saving clip ${n + 1} of ${todo.size}...", (n + 1f) / todo.size)
                             val saved = withContext(Dispatchers.IO) { saveToGallery(tmp, m.title) }
+                            if (simple) simpleCount++
                             val clip = LibraryClip(
                                 id = System.currentTimeMillis().toString() + "_" + m.id,
                                 title = m.title, uri = saved.toString(), seconds = m.end - m.start,
@@ -632,7 +780,8 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Throwable) {
-                            lastErr = e.message ?: e.toString()
+                            lastErr = "${e.javaClass.simpleName}: ${e.message ?: ""}".trim().trimEnd(':')
+                            Diag.log(ctx, "EXPORT clip ${m.id} attempt $attempt failed", e)
                         } finally {
                             tmp.delete()
                         }
@@ -644,10 +793,14 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                 timings["export"] = (SystemClock.elapsedRealtime() - t0) / todo.size
                 val bad = todo.count { exportStatus[it.id]?.startsWith("fail") == true }
                 progress = 1f
+                Diag.log(ctx, "EXPORT done ok=${todo.size - bad} failed=$bad simple=$simpleCount")
+                if (simpleCount > 0) notice = "$simpleCount clip(s) were made with the simple centre crop because the full layout could not be rendered on this phone."
                 if (bad == 0) {
+                    phase = "Completed"
                     stage = Stage.DONE
                     ClipService.done(ctx, "Clips ready", "${todo.size} clips were exported and checked.")
                 } else {
+                    phase = "Failed"
                     error = "$bad of ${todo.size} clips could not be exported. Tap Retry to try them again."
                     failed = true
                     resumeAction = Resume.EXPORT
@@ -656,13 +809,18 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                 }
                 persist()
             } catch (e: CancellationException) {
-                stage = Stage.REVIEW
-                paused = true
-                resumeAction = Resume.EXPORT
-                persist()
+                if (stallMsg == null) {
+                    stage = Stage.REVIEW
+                    paused = true
+                    phase = ""
+                    resumeAction = Resume.EXPORT
+                    persist()
+                }
                 throw e
             } catch (e: Throwable) {
-                error = "Export failed: ${e.message ?: e}"
+                Diag.log(ctx, "EXPORT failed", e)
+                phase = "Failed"
+                error = "Export failed: ${e.javaClass.simpleName}: ${e.message ?: e}"
                 failed = true
                 resumeAction = Resume.EXPORT
                 stage = if (results.isEmpty()) Stage.REVIEW else Stage.DONE
@@ -674,32 +832,125 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Copies the checked file into Movies/ClipForge and confirms the saved copy has the same size. */
-    private fun saveToGallery(file: File, title: String): Uri {
+    /** Copies the checked file into Movies/ClipForge and confirms the saved copy is really there and not truncated. */
+    private fun saveToGallery(file: File, title: String): Uri =
+        saveViaMediaStore(file, title, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "Movies/ClipForge", "ClipForge")
+
+    private fun saveViaMediaStore(file: File, title: String, collection: Uri, folder: String, prefix: String): Uri {
         val resolver = ctx.contentResolver
         val safe = title.replace(Regex("[^A-Za-z0-9 ]"), "").trim().take(30).ifEmpty { "clip" }
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, "ClipForge_${System.currentTimeMillis() / 1000}_$safe.mp4")
-            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/ClipForge")
-            put(MediaStore.Video.Media.IS_PENDING, 1)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, "${prefix}_${System.currentTimeMillis() / 1000}_$safe.mp4")
+            put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, folder)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
-        val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            ?: throw IllegalStateException("Could not save to the Gallery.")
+        val uri = resolver.insert(collection, values)
+            ?: throw IllegalStateException("The phone refused to create the file in $folder (storage full or blocked).")
         try {
-            resolver.openOutputStream(uri)!!.use { out -> file.inputStream().use { it.copyTo(out) } }
+            val out = resolver.openOutputStream(uri) ?: throw IllegalStateException("Could not open the destination file.")
+            out.use { o -> file.inputStream().use { it.copyTo(o) }; o.flush() }
             values.clear()
-            values.put(MediaStore.Video.Media.IS_PENDING, 0)
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
-            val saved = resolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
-            if (saved != file.length()) {
-                throw IllegalStateException("Saving to the Gallery failed (the saved file is incomplete). Check free storage.")
+            // The copy must exist and not be shorter than the source. Some phones report the size late or as 0,
+            // so a real read of the file is used as the final proof instead of trusting one number.
+            val stat = try { resolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L } catch (_: Exception) { -1L }
+            var q = -1L
+            resolver.query(uri, arrayOf(MediaStore.MediaColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst()) q = c.getLong(0)
             }
+            val reported = maxOf(stat, q)
+            if (reported in 1 until file.length()) {
+                throw IllegalStateException("The saved file is incomplete ($reported of ${file.length()} bytes). Check free storage.")
+            }
+            if (reported <= 0L) {
+                val n = resolver.openInputStream(uri)?.use { it.read(ByteArray(4096)) } ?: -1
+                if (n <= 0) throw IllegalStateException("The saved file could not be read back.")
+            }
+            Diag.log(ctx, "SAVED ${file.length() / 1024} KB to $folder as $uri")
             return uri
         } catch (e: Throwable) {
             try { resolver.delete(uri, null, null) } catch (_: Exception) {}
             throw e
         }
+    }
+
+    /** "Save to Device": an extra copy of a library clip in Downloads/ClipForge, checked before it says Saved. */
+    fun saveCopy(c: LibraryClip) {
+        libraryMsg = "Saving a copy of \"${c.title}\"..."
+        scope.launch {
+            try {
+                val msg = withContext(Dispatchers.IO) {
+                    val tmp = File(ctx.cacheDir, "copy_${c.id}.mp4")
+                    try {
+                        ctx.contentResolver.openInputStream(Uri.parse(c.uri))?.use { i -> tmp.outputStream().use { i.copyTo(it) } }
+                            ?: throw IllegalStateException("The clip file could not be opened. It may have been deleted from the Gallery.")
+                        if (tmp.length() < 20_000) throw IllegalStateException("The clip file is empty or damaged.")
+                        saveViaMediaStore(tmp, c.title, MediaStore.Downloads.EXTERNAL_CONTENT_URI, "Download/ClipForge", "ClipForge")
+                        "Saved a copy to Downloads/ClipForge (${tmp.length() / 1024} KB)."
+                    } finally {
+                        tmp.delete()
+                    }
+                }
+                libraryMsg = msg
+            } catch (e: Throwable) {
+                Diag.log(ctx, "SAVE COPY failed", e)
+                libraryMsg = "Could not save: ${e.message ?: e.javaClass.simpleName}. Tap Save to Device to try again."
+            }
+        }
+    }
+
+    /** Loads clips that are in Movies/ClipForge but missing from the list, and drops entries whose file was deleted. */
+    fun refreshLibrary() {
+        scope.launch {
+            val found = withContext(Dispatchers.IO) { scanGallery() }
+            val known = library.map { it.uri }.toSet()
+            var changed = false
+            for (c in found) if (c.uri !in known) { library.add(c); changed = true }
+            val gone = withContext(Dispatchers.IO) { library.filter { !fileExists(it.uri) } }
+            if (gone.isNotEmpty()) { library.removeAll(gone.toSet()); changed = true }
+            if (changed) {
+                library.sortByDescending { it.created }
+                store.saveLibrary(library.toList())
+            }
+        }
+    }
+
+    private fun fileExists(uri: String): Boolean {
+        return try {
+            ctx.contentResolver.openAssetFileDescriptor(Uri.parse(uri), "r")?.use { true } ?: true
+        } catch (_: java.io.FileNotFoundException) {
+            false
+        } catch (_: Exception) {
+            true // unknown: keep the entry rather than lose a clip
+        }
+    }
+
+    private fun scanGallery(): List<LibraryClip> {
+        val out = ArrayList<LibraryClip>()
+        try {
+            val proj = arrayOf(
+                MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME,
+                MediaStore.Video.Media.DURATION, MediaStore.Video.Media.DATE_ADDED,
+            )
+            ctx.contentResolver.query(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, proj,
+                "${MediaStore.Video.Media.RELATIVE_PATH} LIKE ? AND ${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?",
+                arrayOf("Movies/ClipForge%", "ClipForge_%"), "${MediaStore.Video.Media.DATE_ADDED} DESC",
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val id = c.getLong(0)
+                    val name = c.getString(1) ?: "clip"
+                    val title = name.removePrefix("ClipForge_").substringAfter('_', name).removeSuffix(".mp4").ifBlank { "Clip" }
+                    val uri = android.content.ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
+                    out.add(LibraryClip("gal_$id", title, uri.toString(), c.getLong(2) / 1000.0, c.getLong(3) * 1000, "Saved", 0))
+                }
+            }
+        } catch (e: Exception) {
+            Diag.log(ctx, "GALLERY scan failed", e)
+        }
+        return out
     }
 
     fun removeFromLibrary(c: LibraryClip) {
@@ -741,6 +992,13 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         error = null
         editIdx = -1
         timings.clear()
+        phase = ""
+        notice = null
         JobStore.clear(ctx)
+    }
+
+    companion object {
+        /** A step that shows no change at all for this long is treated as stalled. */
+        const val STALL_MS = 4 * 60 * 1000L
     }
 }

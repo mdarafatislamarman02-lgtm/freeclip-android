@@ -8,7 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
@@ -25,6 +27,7 @@ class ClipService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         ensureChannel(this)
     }
 
@@ -43,6 +46,8 @@ class ClipService : Service() {
     override fun onDestroy() {
         try { wl?.let { if (it.isHeld) it.release() } } catch (_: Exception) {}
         wl = null
+        try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
+        instance = null
         super.onDestroy()
     }
 
@@ -76,19 +81,60 @@ class ClipService : Service() {
                 .setProgress(100, pct.coerceIn(0, 100), pct < 0)
                 .build()
 
+        /** True only while the service should be showing its notification; late progress updates are ignored after that. */
+        @Volatile
+        var running = false
+        @Volatile
+        private var instance: ClipService? = null
+        private val handler = Handler(Looper.getMainLooper())
+
         fun start(ctx: Context) {
+            running = true
             try {
                 ContextCompat.startForegroundService(ctx, Intent(ctx, ClipService::class.java))
             } catch (_: Exception) {
             }
         }
 
+        /** Stops the service and removes its notification. Safe to call right after start (waits until it is really up). */
         fun stop(ctx: Context) {
-            try { ctx.stopService(Intent(ctx, ClipService::class.java)) } catch (_: Exception) {}
+            running = false
+            val inst = instance
+            if (inst != null) {
+                try { inst.stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
+                try { inst.stopSelf() } catch (_: Exception) {}
+            } else {
+                // Not created yet: try again shortly so it does not start and stay forever.
+                handler.postDelayed({
+                    if (!running) {
+                        instance?.let {
+                            try { it.stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
+                            try { it.stopSelf() } catch (_: Exception) {}
+                        }
+                        try { ctx.stopService(Intent(ctx, ClipService::class.java)) } catch (_: Exception) {}
+                    }
+                }, 1500)
+            }
+            cancelProgress(ctx)
         }
 
-        /** Updates the ongoing notification (at most once a second). */
+        fun cancelProgress(ctx: Context) {
+            try { (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIF_ID) } catch (_: Exception) {}
+        }
+
+        /** Removes both notifications (used when the app starts or is opened: nothing stale may stay). */
+        fun clearAll(ctx: Context) {
+            try {
+                val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                if (!running) nm.cancel(NOTIF_ID)
+                nm.cancel(DONE_ID)
+            } catch (_: Exception) {
+            }
+        }
+
+        /** Updates the ongoing notification (at most once a second, and only while a job is really running). */
         fun update(ctx: Context, text: String, pct: Int) {
+            if (!running) return
             val now = SystemClock.elapsedRealtime()
             if (now - lastNotify < 1000) return
             lastNotify = now

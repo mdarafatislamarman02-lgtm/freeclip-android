@@ -93,6 +93,7 @@ object Speech {
         startS: Double,
         endS: Double,
         onStatus: (String, Float) -> Unit,
+        maxParts: Int = 6,
     ): Analysis = withContext(Dispatchers.Default) {
         val job = currentCoroutineContext()
 
@@ -104,7 +105,7 @@ object Speech {
         val model = Model(dir.absolutePath)
         val hop = AudioDecoder.HOP / AudioDecoder.RATE.toDouble()
         val span = max(endS - startS, 1.0)
-        val parts = if (span < 120) 1 else (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 6)
+        val parts = if (span < 120 || maxParts <= 1) 1 else (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, maxParts.coerceAtLeast(2))
         val segLen = span / parts
         val prog = DoubleArray(parts)
         fun report() = onStatus("Listening to the video...", 0.1f + 0.9f * (prog.sum() / parts).toFloat())

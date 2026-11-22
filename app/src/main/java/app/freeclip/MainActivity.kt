@@ -71,6 +71,8 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         vm.inBackground = false
+        // Opening the app: a finished-job notification is no longer needed, and a progress one must not outlive its job.
+        ClipService.clearAll(this)
     }
 
     override fun onStop() {

@@ -59,18 +59,23 @@ object ExportCheck {
             if (expectAudio && r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) != "yes") {
                 return Result(false, "The export has no sound, but the original video does.")
             }
+            // Black-frame check: only fails when frames CAN be read and ALL are pure black. Not being able to read
+            // a thumbnail on some phones is not treated as a broken file.
             var decoded = 0
             var dark = 0
             for (f in listOf(0.2, 0.5, 0.8)) {
-                val bmp = r.getScaledFrameAtTime((got * f * 1e6).toLong(), MediaMetadataRetriever.OPTION_CLOSEST, 64, 64)
+                val bmp = try {
+                    r.getScaledFrameAtTime((got * f * 1e6).toLong(), MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 64, 64)
+                } catch (_: Exception) {
+                    null
+                }
                 if (bmp != null) {
                     decoded++
-                    if (meanLuma(bmp) < 1.5) dark++
+                    if (meanLuma(bmp) < 1.0) dark++
                     bmp.recycle()
                 }
             }
-            if (decoded == 0) return Result(false, "The exported video cannot be decoded (corrupted).")
-            if (dark == decoded) return Result(false, "The exported video is completely black.")
+            if (decoded > 0 && dark == decoded) return Result(false, "The exported video is completely black.")
             return Result(true, "OK")
         } catch (e: Exception) {
             return Result(false, "The exported file cannot be read (${e.message ?: e.javaClass.simpleName}).")

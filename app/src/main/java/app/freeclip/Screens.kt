@@ -2,6 +2,17 @@ package app.freeclip
 
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
+import android.provider.Settings
+import android.util.Size
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -343,14 +354,36 @@ private fun BusyCard(vm: MainVM) {
 
 @Composable
 private fun BusyPanel(vm: MainVM) = Panel {
+    var now by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = SystemClock.elapsedRealtime()
+            delay(1000)
+        }
+    }
+    val el = if (vm.jobStartMs > 0) ((now - vm.jobStartMs) / 1000).toInt().coerceAtLeast(0) else 0
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(vm.phase.ifEmpty { "Working" }, color = C.Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Text("%d:%02d".format(el / 60, el % 60), color = C.Mute, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
     Text(vm.status.ifEmpty { "Working..." }, fontWeight = FontWeight.Bold, color = C.Ink)
-    LinearProgressIndicator(
-        progress = { vm.progress.coerceIn(0f, 1f) },
-        modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(8.dp)),
-        color = C.Violet, trackColor = C.Line,
-    )
+    val known = vm.progress > 0.001f && vm.progress < 0.999f
+    if (known) {
+        LinearProgressIndicator(
+            progress = { vm.progress.coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(8.dp)),
+            color = C.Violet, trackColor = C.Line,
+        )
+    } else {
+        // No exact progress for this step: show activity, not an invented percentage.
+        LinearProgressIndicator(
+            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(8.dp)),
+            color = C.Violet, trackColor = C.Line,
+        )
+    }
     Text(
-        "${(vm.progress * 100).toInt()}%" + (if (vm.eta.isNotEmpty()) "  -  ${vm.eta}" else "") + "  -  keeps going if you leave the app.",
+        (if (known) "${(vm.progress * 100).toInt()}%" else "In progress") +
+            (if (vm.eta.isNotEmpty()) "  -  ${vm.eta}" else "") + "  -  keeps going if you leave the app.",
         color = C.Mute, fontSize = 13.sp,
     )
     if (vm.stage != Stage.RENDERING) {
@@ -426,6 +459,8 @@ private fun DoneCard(vm: MainVM) {
     if (vm.results.isNotEmpty()) {
         Text("${vm.results.size} clips exported and checked. Saved in Movies/ClipForge and listed in My Clips.", color = C.Mute, fontSize = 13.sp)
     }
+    vm.notice?.let { Text(it, color = C.Warn, fontSize = 12.sp) }
+    vm.libraryMsg?.let { Text(it, color = if (it.startsWith("Could not")) C.Bad else C.Good, fontSize = 12.sp) }
     vm.results.forEach { ClipRow(it, vm, false) }
     if (failedMoments.isNotEmpty()) {
         Panel {
@@ -534,44 +569,76 @@ private fun TrimRow(label: String, value: Double, onMinus: () -> Unit, onPlus: (
 @Composable
 fun ClipRow(c: LibraryClip, vm: MainVM, deletable: Boolean) {
     val ctx = LocalContext.current
+    val play = {
+        try {
+            ctx.startActivity(
+                Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(c.uri), "video/mp4")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            )
+        } catch (_: Exception) {
+            vm.libraryMsg = "No video player could open this clip."
+        }
+    }
+    // Real thumbnail of the saved video (not a placeholder).
+    val thumb by produceState<android.graphics.Bitmap?>(null, c.uri) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                ctx.contentResolver.loadThumbnail(Uri.parse(c.uri), Size(480, 270), null)
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (c.score > 0) ScoreRing(c.score, 44.dp)
-            Column(Modifier.weight(1f)) {
+            Box(
+                Modifier.width(96.dp).aspectRatio(9f / 12f).clip(RoundedCornerShape(12.dp)).background(C.Card).clickable { play() },
+                contentAlignment = Alignment.Center,
+            ) {
+                val bmp = thumb
+                if (bmp != null) Image(bmp.asImageBitmap(), c.title, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+                else Text("Play", color = C.Mute, fontSize = 12.sp)
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(c.title, color = C.Ink, fontWeight = FontWeight.Bold, maxLines = 2)
-                Text("${c.seconds.toInt()}s  |  ${c.layout}", color = C.Mute, fontSize = 12.sp)
+                Text("${fmt(c.seconds)}  |  ${c.layout}" + if (c.score > 0) "  |  score ${c.score}" else "", color = C.Mute, fontSize = 12.sp)
+                Text(java.text.SimpleDateFormat("d MMM yyyy, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(c.created)), color = C.Mute, fontSize = 11.sp)
             }
         }
+        GhostButton("Save to Device (Downloads)", Modifier.fillMaxWidth()) { vm.saveCopy(c) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GradButton("Play") {
+            GradButton("Play", Modifier.weight(1f)) { play() }
+            GhostButton("Share", Modifier.weight(1f)) {
                 try {
-                    ctx.startActivity(
-                        Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(c.uri), "video/mp4")
-                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    )
+                    val send = Intent(Intent.ACTION_SEND).setType("video/mp4")
+                        .putExtra(Intent.EXTRA_STREAM, Uri.parse(c.uri))
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    ctx.startActivity(Intent.createChooser(send, "Share clip"))
                 } catch (_: Exception) {
+                    vm.libraryMsg = "Could not share this clip."
                 }
             }
-            GhostButton("Share") {
-                val send = Intent(Intent.ACTION_SEND).setType("video/mp4")
-                    .putExtra(Intent.EXTRA_STREAM, Uri.parse(c.uri))
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                ctx.startActivity(Intent.createChooser(send, "Share clip"))
-            }
-            if (deletable) GhostButton("Remove") { vm.removeFromLibrary(c) }
         }
+        if (deletable) GhostButton("Remove from list") { vm.removeFromLibrary(c) }
     }
 }
 
 @Composable
 fun MyClipsScreen(vm: MainVM) {
+    LaunchedEffect(Unit) { vm.refreshLibrary() }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("My Clips", fontWeight = FontWeight.ExtraBold, fontSize = 24.sp, color = C.Ink)
+        vm.libraryMsg?.let { m ->
+            val bad = m.startsWith("Could not") || m.startsWith("No video")
+            Text(m, color = if (bad) C.Bad else C.Good, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
         if (vm.library.isEmpty()) {
-            Text("Clips you export appear here and in your Gallery (Movies/ClipForge).", color = C.Mute)
+            Text("Clips you export appear here and in your Gallery (Movies/ClipForge). Nothing has been saved yet.", color = C.Mute)
+        } else {
+            Text("${vm.library.size} saved clip(s). They stay here after you close the app.", color = C.Mute, fontSize = 13.sp)
         }
         vm.library.forEach { ClipRow(it, vm, true) }
     }
@@ -637,6 +704,40 @@ fun SettingsScreen(vm: MainVM) {
             vm.timings["analyze"]?.let { Text("Listening and transcript: ${it / 1000} s", color = C.Ink, fontSize = 13.sp) }
             vm.timings["export"]?.let { Text("Export, per clip: ${it / 1000} s", color = C.Ink, fontSize = 13.sp) }
             Text("Send me these numbers if it is still slow, so the real bottleneck can be fixed.", color = C.Mute, fontSize = 11.sp)
+        }
+        Panel {
+            Label("Problems? Send the log")
+            Text("If a video fails or gets stuck, tap this and send me the text. It lists the exact error, not a guess.", color = C.Mute, fontSize = 12.sp)
+            val ctx = LocalContext.current
+            GradButton("Share diagnostic log", Modifier.fillMaxWidth()) {
+                try {
+                    val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_SUBJECT, "ClipForge AI log")
+                        .putExtra(Intent.EXTRA_TEXT, Diag.read(ctx))
+                    ctx.startActivity(Intent.createChooser(send, "Share log"))
+                } catch (_: Exception) {
+                }
+            }
+            GhostButton("Clear log", Modifier.fillMaxWidth()) { Diag.clear(ctx) }
+        }
+        Panel {
+            Label("Keep working in the background")
+            Text(
+                "Some phones (Xiaomi / MIUI, Oppo, Vivo, Samsung) stop apps when the screen is off. For long videos: " +
+                    "set ClipForge AI battery to \"No restrictions\" and turn on Autostart.",
+                color = C.Mute, fontSize = 12.sp,
+            )
+            val ctx2 = LocalContext.current
+            GhostButton("Open battery settings", Modifier.fillMaxWidth()) {
+                try {
+                    ctx2.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                } catch (_: Exception) {
+                    try {
+                        ctx2.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + ctx2.packageName)))
+                    } catch (_: Exception) {
+                    }
+                }
+            }
         }
         Panel {
             Label("Privacy")

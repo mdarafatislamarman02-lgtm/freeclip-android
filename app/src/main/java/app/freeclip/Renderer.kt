@@ -19,6 +19,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
+import androidx.media3.effect.Presentation
 import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.TextOverlay
 import androidx.media3.effect.TextureOverlay
@@ -154,6 +155,7 @@ object Renderer {
         title: String,
         spec: ExportSpec,
         out: File,
+        safe: Boolean = false,
         onProgress: (Float) -> Unit,
     ) = withContext(Dispatchers.Main) {
         suspendCancellableCoroutine<Unit> { cont ->
@@ -178,7 +180,9 @@ object Renderer {
             }
 
             val videoEffects = ArrayList<Effect>()
-            videoEffects.add(layoutFx)
+            // safe = the plain centre-crop that worked in the first version (no custom GL shader).
+            if (safe) videoEffects.add(Presentation.createForWidthAndHeight(layoutFx.outW, layoutFx.outH, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
+            else videoEffects.add(layoutFx)
             if (overlays.isNotEmpty()) videoEffects.add(OverlayEffect(ImmutableList.copyOf(overlays)))
 
             val edited = EditedMediaItem.Builder(item)
