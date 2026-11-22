@@ -33,6 +33,30 @@ object Speech {
         val dir = modelDir(ctx)
         if (File(dir, "am/final.mdl").exists()) return dir
 
+        // Fast path: the model is bundled in the app, so there is nothing to download.
+        try {
+            val assetNames = ctx.assets.list("") ?: emptyArray()
+            if ("vosk-model.zip" in assetNames) {
+                val target = File(ctx.filesDir, "models").apply { mkdirs() }
+                val targetPath = target.canonicalPath + File.separator
+                onProgress(0.2f)
+                ZipInputStream(ctx.assets.open("vosk-model.zip").buffered()).use { zin ->
+                    while (true) {
+                        val e = zin.nextEntry ?: break
+                        val out = File(target, e.name)
+                        if (!out.canonicalPath.startsWith(targetPath)) continue
+                        if (e.isDirectory) out.mkdirs() else {
+                            out.parentFile?.mkdirs()
+                            FileOutputStream(out).use { zin.copyTo(it) }
+                        }
+                    }
+                }
+                if (File(dir, "am/final.mdl").exists()) return dir
+            }
+        } catch (e: Exception) {
+            Diag.log(ctx, "MODEL bundled copy failed, trying download", e)
+        }
+
         val zip = File(ctx.cacheDir, "$MODEL_NAME.zip")
         val conn = URL(MODEL_URL).openConnection() as HttpURLConnection
         conn.connectTimeout = 20_000
@@ -97,8 +121,8 @@ object Speech {
     ): Analysis = withContext(Dispatchers.Default) {
         val job = currentCoroutineContext()
 
-        onStatus("Getting the speech model (first time only)...", 0f)
-        val dir = ensureModel(ctx) { onStatus("Downloading speech model (first time only)...", it * 0.1f) }
+        onStatus("Preparing the speech model (first time only, a few seconds)...", 0f)
+        val dir = ensureModel(ctx) { onStatus("Preparing the speech model (first time only)...", it * 0.1f) }
         job.ensureActive()
 
         onStatus("Loading the speech model...", 0.1f)

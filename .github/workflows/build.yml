@@ -23,6 +23,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
+      - name: Bundle the speech model inside the app (no slow first-run download on the phone)
+        run: |
+          mkdir -p app/src/main/assets
+          curl -fSL --retry 5 --retry-delay 5 -o app/src/main/assets/vosk-model.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -tq app/src/main/assets/vosk-model.zip
+          ls -la app/src/main/assets
       - name: Build release APK
         run: |
           set -o pipefail
