@@ -194,7 +194,7 @@ object Cloud {
                 "You write the post text for short vertical videos (TikTok / Shorts / Reels). For each numbered transcript below write: " +
                     "a punchy curiosity-driven title of at most 8 words (no quotes, no hashtags, no emojis); " +
                     "a description of 1-2 sentences, at most 200 characters, that matches what is really said; " +
-                    "and 5-8 relevant hashtags (each starting with #, no spaces, include #shorts). Write in English. " +
+                    "and 5-8 relevant hashtags (each starting with #, no spaces, include #shorts). Write the title, description and hashtags in the same language as the transcript (hashtags may also be English). " +
                     "Return only JSON: {\"clips\":[{\"title\":\"...\",\"description\":\"...\",\"hashtags\":[\"#a\",\"#b\"]}, ...]} " +
                     "with exactly ${moments.size} items in the same order.\n\n"
             )

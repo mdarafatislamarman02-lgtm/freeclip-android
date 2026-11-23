@@ -48,7 +48,7 @@ class Store(ctx: Context) {
         set(v) { sp.edit().putString("lang", v).apply() }
     /** Captions in English even when the video is in another language (needs Groq Whisper). */
     var captionEnglish: Boolean
-        get() = sp.getBoolean("captionEnglish", true)
+        get() = sp.getBoolean("captionEnglish", false)
         set(v) { sp.edit().putBoolean("captionEnglish", v).apply() }
     /** Export the found clips automatically (like Opus) so they appear in My Clips without extra taps. */
     var autoExport: Boolean

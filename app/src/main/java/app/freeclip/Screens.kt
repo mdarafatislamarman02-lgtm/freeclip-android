@@ -888,8 +888,8 @@ fun SettingsScreen(vm: MainVM) {
         Panel {
             Label("Language")
             Text(
-                "Video in another language? Pick Auto-detect. With a Groq key the captions can be translated to English. " +
-                    "Offline mode reads English only.",
+                "Auto-detect finds the language spoken in the video, and the captions are written in that same language. " +
+                    "This needs a free Groq key. Offline mode reads English only.",
                 color = C.Mute, fontSize = 12.sp,
             )
             var lang by remember { mutableStateOf(vm.store.lang) }
@@ -908,8 +908,8 @@ fun SettingsScreen(vm: MainVM) {
             }
             Label("Captions")
             ChipRow {
-                Chip("English", capEn) { capEn = true; vm.store.captionEnglish = true }
                 Chip("Same as the video", !capEn) { capEn = false; vm.store.captionEnglish = false }
+                Chip("Translate to English", capEn) { capEn = true; vm.store.captionEnglish = true }
             }
             Label("After the clips are found")
             ChipRow {

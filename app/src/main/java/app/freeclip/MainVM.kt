@@ -664,7 +664,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                         else -> null
                     }
                     Diag.log(ctx, "ANALYZE start stt=${cfg?.stt?.label ?: "Offline"} lang=${store.lang} translateToEnglish=${cfg?.translate == true} range=${rangeA.toInt()}-${rangeB.toInt()}s")
-                    if (cfg == null && store.lang != "auto" && store.lang != "en") notice = "Offline mode understands English only. For other languages add a free Groq key in Settings."
+                    if (cfg == null && store.lang != "en") notice = "Offline mode understands English only, so it cannot detect other languages. For automatic language detection add a free Groq key in Settings > Faster, better results."
                     val cloudTr: Analysis? = if (cfg == null) null else try {
                         Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble(), onStatus, cloud = cfg)
                             .also {

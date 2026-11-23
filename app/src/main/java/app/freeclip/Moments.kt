@@ -198,7 +198,7 @@ object Moments {
             // Never pick two clips that overlap in time, or that say almost the same words (a repeated line / looping scene).
             val overlaps = chosen.any { min(b, it.end + 1.0) - max(a, it.start - 1.0) > 0.0 }
             if (overlaps) continue
-            val toks = c.win.flatMap { it.text.lowercase().split(Regex("[^a-z0-9']+")) }.filter { it.length > 2 }.toSet()
+            val toks = c.win.flatMap { it.text.lowercase().split(Regex("[^\\p{L}\\p{N}']+")) }.filter { it.length > 2 }.toSet()
             val similar = chosenToks.any { o ->
                 val inter = toks.count { it in o }
                 val uni = toks.size + o.size - inter

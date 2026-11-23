@@ -14,7 +14,7 @@ android {
         applicationId = "app.clipforge"
         minSdk = 29
         targetSdk = 34
-        versionCode = 10
+        versionCode = 11
         versionName = "1.0.0"
     }
 
