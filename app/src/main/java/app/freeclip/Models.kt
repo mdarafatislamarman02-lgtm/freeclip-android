@@ -26,6 +26,9 @@ data class LibraryClip(
     val layout: String,
     val score: Int,
     val source: String = "",
+    /** The part of the source video this clip was cut from (used to avoid saving the same clip twice). */
+    val startS: Double = -1.0,
+    val endS: Double = -1.0,
 )
 
 /** Speech + loudness for the analysed part of the video. [energy] is 0..1 per [hop] seconds, aligned to video time. */

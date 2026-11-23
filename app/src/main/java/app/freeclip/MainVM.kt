@@ -853,10 +853,13 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                             report("Saving clip ${n + 1} of ${todo.size}...", (n + 1f) / todo.size)
                             val saved = withContext(Dispatchers.IO) { saveToGallery(tmp, m.title) }
                             if (simple) simpleCount++
+                            // Exporting the same part again replaces the old copy instead of adding another one.
+                            val same = library.filter { it.source == videoName && it.startS >= 0 && kotlin.math.abs(it.startS - m.start) < 1.0 && kotlin.math.abs(it.endS - m.end) < 1.0 }
+                            for (o in same) { deleteQuiet(o.uri); library.remove(o) }
                             val clip = LibraryClip(
                                 id = System.currentTimeMillis().toString() + "_" + m.id,
                                 title = m.title, uri = saved.toString(), seconds = m.end - m.start,
-                                created = System.currentTimeMillis(), layout = layout.label, score = m.score, source = videoName,
+                                created = System.currentTimeMillis(), layout = layout.label, score = m.score, source = videoName, startS = m.start, endS = m.end,
                             )
                             results.add(clip)
                             library.add(0, clip)
@@ -1040,6 +1043,23 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             Diag.log(ctx, "GALLERY scan failed", e)
         }
         return out
+    }
+
+    private fun deleteQuiet(uri: String) {
+        try { ctx.contentResolver.delete(Uri.parse(uri), null, null) } catch (_: Exception) {}
+    }
+
+    private fun dupKey(c: LibraryClip) = "${c.source}|${c.title}|${Math.round(c.seconds)}"
+
+    /** Clips that are the same clip saved more than once (same video, title and length). The newest of each stays. */
+    fun duplicates(): List<LibraryClip> =
+        library.groupBy { dupKey(it) }.values.flatMap { g -> g.sortedByDescending { it.created }.drop(1) }
+
+    fun removeDuplicates() {
+        val d = duplicates()
+        for (c in d) { deleteQuiet(c.uri); library.remove(c) }
+        store.saveLibrary(library.toList())
+        libraryMsg = if (d.isEmpty()) "No duplicates found." else "Removed ${d.size} duplicate clip(s). The newest copy of each is kept."
     }
 
     fun removeFromLibrary(c: LibraryClip, deleteFile: Boolean = false) {

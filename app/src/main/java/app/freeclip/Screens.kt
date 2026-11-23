@@ -701,6 +701,10 @@ fun MyClipsScreen(vm: MainVM) {
                 val bad = m.startsWith("Could not") || m.startsWith("No video")
                 Text(m, color = if (bad) C.Bad else C.Good, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
+            val dups = vm.duplicates()
+            if (dups.isNotEmpty()) {
+                GhostButton("Remove ${dups.size} duplicate clip(s)", Modifier.fillMaxWidth()) { vm.removeDuplicates() }
+            }
             if (vm.library.isEmpty()) {
                 Text("Clips you export appear here and in your Gallery (Movies/ClipForge). Nothing has been saved yet.", color = C.Mute)
             }

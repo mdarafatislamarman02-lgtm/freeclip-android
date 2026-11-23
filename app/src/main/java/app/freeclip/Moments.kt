@@ -178,11 +178,21 @@ object Moments {
         cands.sortByDescending { it.score }
 
         val chosen = ArrayList<Moment>()
+        val chosenToks = ArrayList<Set<String>>()
         for (c in cands) {
             val a = c.win.first().start
             val b = c.win.last().end
-            val overlaps = chosen.any { min(b, it.end) - max(a, it.start) > 0.15 * (b - a) }
+            // Never pick two clips that overlap in time, or that say almost the same words (a repeated line / looping scene).
+            val overlaps = chosen.any { min(b, it.end + 1.0) - max(a, it.start - 1.0) > 0.0 }
             if (overlaps) continue
+            val toks = c.win.flatMap { it.text.lowercase().split(Regex("[^a-z0-9']+")) }.filter { it.length > 2 }.toSet()
+            val similar = chosenToks.any { o ->
+                val inter = toks.count { it in o }
+                val uni = toks.size + o.size - inter
+                uni > 0 && inter.toDouble() / uni > 0.5
+            }
+            if (similar) continue
+            chosenToks.add(toks)
             val top = c.feats.entries.filter { it.key != "match" }.sortedByDescending { it.value }.take(3)
                 .filter { it.value >= 0.5 }.map { REASONS.getValue(it.key) }.toMutableList()
             if ((c.feats["match"] ?: 0.0) >= 0.5) top.add(0, "matches your prompt")
