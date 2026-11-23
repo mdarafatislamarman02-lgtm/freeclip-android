@@ -25,6 +25,7 @@ data class LibraryClip(
     val created: Long,
     val layout: String,
     val score: Int,
+    val source: String = "",
 )
 
 /** Speech + loudness for the analysed part of the video. [energy] is 0..1 per [hop] seconds, aligned to video time. */

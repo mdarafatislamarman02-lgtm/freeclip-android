@@ -183,8 +183,8 @@ object Cloud {
         try {
             c.requestMethod = "POST"
             c.doOutput = true
-            c.connectTimeout = 15_000
-            c.readTimeout = 40_000
+            c.connectTimeout = 10_000
+            c.readTimeout = 20_000
             c.setRequestProperty("Content-Type", "application/json")
             headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
             c.outputStream.use { it.write(body.toString().toByteArray()) }

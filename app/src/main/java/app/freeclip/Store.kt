@@ -60,7 +60,7 @@ class Store(ctx: Context) {
                 LibraryClip(
                     o.getString("id"), o.getString("title"), o.getString("uri"),
                     o.getDouble("seconds"), o.getLong("created"),
-                    o.optString("layout", ""), o.optInt("score", 0),
+                    o.optString("layout", ""), o.optInt("score", 0), o.optString("source", ""),
                 )
             }
         }
@@ -75,7 +75,7 @@ class Store(ctx: Context) {
                 arr.put(
                     JSONObject().put("id", c.id).put("title", c.title).put("uri", c.uri)
                         .put("seconds", c.seconds).put("created", c.created)
-                        .put("layout", c.layout).put("score", c.score)
+                        .put("layout", c.layout).put("score", c.score).put("source", c.source)
                 )
             }
             libFile.writeText(arr.toString())

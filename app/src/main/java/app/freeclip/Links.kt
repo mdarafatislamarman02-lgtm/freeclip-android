@@ -241,7 +241,17 @@ object Links {
             }
             vErr?.let { throw it }
             onStatus("Putting video and audio together...", 0.95f)
-            mux(v, a, out)
+            var mErr: Throwable? = null
+            val mt = Thread { try { mux(v, a, out) } catch (t: Throwable) { mErr = t } }
+            mt.start()
+            val tot = (v.length() + a.length()).coerceAtLeast(1L)
+            while (mt.isAlive) {
+                check()
+                val p = (0.95f + 0.049f * (out.length().toFloat() / tot)).coerceAtMost(0.999f)
+                if (onVideo != null && early != null) onVideo.invoke(p) else onStatus("Putting video and audio together...", p)
+                mt.join(1000)
+            }
+            mErr?.let { throw it }
             v.delete()
             return Result(out, title)
         }

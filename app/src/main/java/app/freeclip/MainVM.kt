@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -176,7 +177,8 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                 delay(10_000)
                 if (active == 0) break
                 val idle = SystemClock.elapsedRealtime() - lastProgressMs
-                if (idle > STALL_MS) {
+                val bgDownload = dlActive && stage != Stage.ANALYZING && stage != Stage.RENDERING
+                if (idle > (if (bgDownload) DL_STALL_MS else STALL_MS)) {
                     onStall(idle)
                     break
                 }
@@ -185,8 +187,24 @@ class MainVM(app: Application) : AndroidViewModel(app) {
     }
 
     /** No change for several minutes: stop the step, say so, and offer Retry (finished work is kept). */
+    private var dlRestarts = 0
+
     private fun onStall(idleMs: Long) {
-        val msg = "No progress for ${idleMs / 60000} minutes during \"${phase.ifEmpty { status }}\", so this step was stopped. Tap Retry (finished work is kept)."
+        // The video download alone stalled while the clips are already found: restart just the download once, keep everything else.
+        if (dlActive && (stage == Stage.READY || stage == Stage.REVIEW) && audioUri != null && !videoReady && dlRestarts < 1) {
+            dlRestarts++
+            Diag.log(ctx, "STALL in background video download, restarting it (clips are kept)")
+            val old = dlJob
+            notice = "The video download stalled, so it was restarted. Your clips are kept."
+            scope.launch {
+                old?.cancelAndJoin()
+                downloadVideoOnly()
+            }
+            return
+        }
+        val onlyVideo = audioUri != null && !videoReady && (stage == Stage.READY || stage == Stage.REVIEW)
+        val msg = if (onlyVideo) "The video download stopped (no progress for ${idleMs / 60000} minutes). Your clips are kept. Tap Retry to download the video again, then export."
+        else "No progress for ${idleMs / 60000} minutes during \"${phase.ifEmpty { status }}\", so this step was stopped. Tap Retry (finished work is kept)."
         Diag.log(ctx, "STALL phase=$phase status=$status stage=$stage")
         stallMsg = msg
         val a = when {
@@ -340,8 +358,11 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         resumeAction = Resume.NONE
         when (a) {
             Resume.DOWNLOAD -> {
-                linkText = jobUrl.ifEmpty { linkText }
-                getClips(force = true)
+                if (audioUri != null && !videoReady && jobUrl.isNotEmpty()) downloadVideoOnly()
+                else {
+                    linkText = jobUrl.ifEmpty { linkText }
+                    getClips(force = true)
+                }
             }
             Resume.ANALYZE -> analyze()
             Resume.EXPORT -> render(resume = true)
@@ -454,6 +475,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         error = null
         failed = false
         paused = false
+        dlRestarts = 0
         tab = 1
         jobUrl = url
         resetResults()
@@ -529,8 +551,45 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Downloads only the video again (after a stall or failure) without touching the transcript or the clips that were found. */
+    private fun downloadVideoOnly() {
+        if (dlActive) return
+        error = null
+        failed = false
+        paused = false
+        phase = "Downloading video"
+        status = "Downloading the video again..."
+        dlProgress = 0f
+        dlActive = true
+        dlJob = scope.launch {
+            begin()
+            try {
+                Diag.log(ctx, "VIDEO retry start")
+                val got = Links.fetch(ctx, jobUrl, { msg, p -> phase = "Downloading video"; report(msg, p) })
+                attachVideo(got.file)
+                Diag.log(ctx, "VIDEO retry done ${got.file.length() / 1024} KB")
+                phase = if (stage == Stage.REVIEW) "Clips ready to review" else "Ready"
+                notice = "The video is downloaded. You can export now."
+                persist()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Diag.log(ctx, "VIDEO retry failed", e)
+                error = "The video could not be downloaded: ${e.message ?: e.javaClass.simpleName}. Your clips are kept. Tap Retry."
+                failed = true
+                phase = "Failed"
+                resumeAction = Resume.DOWNLOAD
+                persist()
+            } finally {
+                dlActive = false
+                end()
+            }
+        }
+    }
+
     /** The audio of a link is ready: show the options now; the video keeps downloading in the background. */
     private fun openAudioFirst(f: File, title: String, durS: Double) {
+        Diag.log(ctx, "AUDIO ready ${durS.toInt()}s")
         videoName = title
         durationS = durS
         videoUri = null
@@ -561,6 +620,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             }
         } catch (_: Exception) {
         }
+        Diag.log(ctx, "VIDEO ready ${f.length() / 1024} KB")
         videoUri = Uri.fromFile(f)
         videoReady = true
         paused = false
@@ -647,7 +707,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                 results.clear()
                 moments.clear()
                 moments.addAll(found)
-                Diag.log(ctx, "ANALYZE done words=${a.words.size} moments=${found.size}")
+                Diag.log(ctx, "ANALYZE done words=${a.words.size} moments=${found.size} in ${(SystemClock.elapsedRealtime() - t0) / 1000}s")
                 if (found.isEmpty()) {
                     error = "No clear speech was found in this part of the video (${a.words.size} words heard). Try a different range, or a video with talking in English."
                     phase = "Failed"
@@ -790,7 +850,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                             val clip = LibraryClip(
                                 id = System.currentTimeMillis().toString() + "_" + m.id,
                                 title = m.title, uri = saved.toString(), seconds = m.end - m.start,
-                                created = System.currentTimeMillis(), layout = layout.label, score = m.score,
+                                created = System.currentTimeMillis(), layout = layout.label, score = m.score, source = videoName,
                             )
                             results.add(clip)
                             library.add(0, clip)
@@ -914,9 +974,11 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 libraryMsg = msg
+                android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
             } catch (e: Throwable) {
                 Diag.log(ctx, "SAVE COPY failed", e)
-                libraryMsg = "Could not save: ${e.message ?: e.javaClass.simpleName}. Tap Save to Device to try again."
+                libraryMsg = "Could not save: ${e.message ?: e.javaClass.simpleName}. Tap the download icon to try again."
+                android.widget.Toast.makeText(ctx, libraryMsg, android.widget.Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -973,7 +1035,15 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         return out
     }
 
-    fun removeFromLibrary(c: LibraryClip) {
+    fun removeFromLibrary(c: LibraryClip, deleteFile: Boolean = false) {
+        if (deleteFile) {
+            try {
+                ctx.contentResolver.delete(Uri.parse(c.uri), null, null)
+            } catch (e: Exception) {
+                Diag.log(ctx, "DELETE file failed", e)
+                libraryMsg = "Could not delete the video file (${e.javaClass.simpleName}). It was removed from the list only."
+            }
+        }
         library.remove(c)
         store.saveLibrary(library.toList())
     }
@@ -1020,5 +1090,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
     companion object {
         /** A step that shows no change at all for this long is treated as stalled. */
         const val STALL_MS = 4 * 60 * 1000L
+        /** The background video download gets longer (big files, slow phones, muxing). */
+        const val DL_STALL_MS = 8 * 60 * 1000L
     }
 }

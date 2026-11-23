@@ -1,6 +1,18 @@
 package app.freeclip
 
 import android.content.Intent
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import android.net.Uri
 import android.os.SystemClock
 import android.provider.Settings
@@ -570,9 +582,46 @@ private fun TrimRow(label: String, value: Double, onMinus: () -> Unit, onPlus: (
 
 // ================================================================ MY CLIPS
 
+/** Round icon button used on clip cards. */
+@Composable
+private fun IconBtn(desc: String, onClick: () -> Unit, content: @Composable () -> Unit) {
+    Box(
+        Modifier.size(44.dp).clip(CircleShape).background(C.Card).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+/** A "download" arrow (the icon set in use has no download icon). */
+@Composable
+private fun DownloadGlyph(color: Color = C.Ink) {
+    Canvas(Modifier.size(22.dp)) {
+        val w = size.width
+        val st = 2.4.dp.toPx()
+        drawLine(color, Offset(w * 0.5f, w * 0.12f), Offset(w * 0.5f, w * 0.66f), st, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.28f, w * 0.46f), Offset(w * 0.5f, w * 0.68f), st, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.72f, w * 0.46f), Offset(w * 0.5f, w * 0.68f), st, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.18f, w * 0.88f), Offset(w * 0.82f, w * 0.88f), st, StrokeCap.Round)
+    }
+}
+
+@Composable
+private fun rememberThumb(uri: String): androidx.compose.runtime.State<android.graphics.Bitmap?> {
+    val ctx = LocalContext.current
+    return produceState<android.graphics.Bitmap?>(null, uri) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                ctx.contentResolver.loadThumbnail(Uri.parse(uri), Size(480, 270), null)
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+}
+
 @Composable
 fun ClipRow(c: LibraryClip, vm: MainVM, deletable: Boolean) {
     val ctx = LocalContext.current
+    var confirmDelete by remember { mutableStateOf(false) }
     val play = {
         try {
             ctx.startActivity(
@@ -583,36 +632,36 @@ fun ClipRow(c: LibraryClip, vm: MainVM, deletable: Boolean) {
             vm.libraryMsg = "No video player could open this clip."
         }
     }
-    // Real thumbnail of the saved video (not a placeholder).
-    val thumb by produceState<android.graphics.Bitmap?>(null, c.uri) {
-        value = withContext(Dispatchers.IO) {
-            try {
-                ctx.contentResolver.loadThumbnail(Uri.parse(c.uri), Size(480, 270), null)
-            } catch (_: Exception) {
-                null
-            }
-        }
-    }
+    val thumb by rememberThumb(c.uri)
     Panel {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Box(
-                Modifier.width(96.dp).aspectRatio(9f / 12f).clip(RoundedCornerShape(12.dp)).background(C.Card).clickable { play() },
+                Modifier.width(92.dp).aspectRatio(9f / 13f).clip(RoundedCornerShape(12.dp)).background(C.Card).clickable { play() },
                 contentAlignment = Alignment.Center,
             ) {
                 val bmp = thumb
                 if (bmp != null) Image(bmp.asImageBitmap(), c.title, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
-                else Text("Play", color = C.Mute, fontSize = 12.sp)
+                Icon(Icons.Filled.PlayArrow, "Play", tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(34.dp))
             }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(c.title, color = C.Ink, fontWeight = FontWeight.Bold, maxLines = 2)
-                Text("${fmt(c.seconds)}  |  ${c.layout}" + if (c.score > 0) "  |  score ${c.score}" else "", color = C.Mute, fontSize = 12.sp)
-                Text(java.text.SimpleDateFormat("d MMM yyyy, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(c.created)), color = C.Mute, fontSize = 11.sp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(c.title, color = C.Ink, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, maxLines = 2)
+                Text("Duration: ${c.seconds.toInt()}s", color = C.Cyan, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    java.text.SimpleDateFormat("d MMM, hh:mm a", java.util.Locale.getDefault()).format(java.util.Date(c.created)) +
+                        if (c.score > 0) "  |  score ${c.score}" else "",
+                    color = C.Mute, fontSize = 12.sp,
+                )
+                if (c.layout.isNotEmpty() && c.layout != "Saved") {
+                    Box(Modifier.clip(RoundedCornerShape(50)).background(C.Violet.copy(alpha = 0.25f)).padding(horizontal = 10.dp, vertical = 3.dp)) {
+                        Text(c.layout, color = C.Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
             }
         }
-        GhostButton("Save to Device (Downloads)", Modifier.fillMaxWidth()) { vm.saveCopy(c) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GradButton("Play", Modifier.weight(1f)) { play() }
-            GhostButton("Share", Modifier.weight(1f)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            GradButton("Play Clip", Modifier.weight(1f)) { play() }
+            IconBtn("Download to phone", { vm.saveCopy(c) }) { DownloadGlyph() }
+            IconBtn("Share", {
                 try {
                     val send = Intent(Intent.ACTION_SEND).setType("video/mp4")
                         .putExtra(Intent.EXTRA_STREAM, Uri.parse(c.uri))
@@ -621,30 +670,58 @@ fun ClipRow(c: LibraryClip, vm: MainVM, deletable: Boolean) {
                 } catch (_: Exception) {
                     vm.libraryMsg = "Could not share this clip."
                 }
-            }
+            }) { Icon(Icons.Filled.Share, "Share", tint = C.Ink) }
+            if (deletable) IconBtn("Delete", { confirmDelete = true }) { Icon(Icons.Filled.Delete, "Delete", tint = C.Bad) }
         }
-        if (deletable) GhostButton("Remove from list") { vm.removeFromLibrary(c) }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete this clip?") },
+            text = { Text("The video file is removed from your phone too.") },
+            confirmButton = { TextButton({ confirmDelete = false; vm.removeFromLibrary(c, deleteFile = true) }) { Text("Delete", color = C.Bad) } },
+            dismissButton = { TextButton({ confirmDelete = false }) { Text("Cancel") } },
+        )
     }
 }
 
 @Composable
 fun MyClipsScreen(vm: MainVM) {
     LaunchedEffect(Unit) { vm.refreshLibrary() }
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("My Clips", fontWeight = FontWeight.ExtraBold, fontSize = 24.sp, color = C.Ink)
-        vm.libraryMsg?.let { m ->
-            val bad = m.startsWith("Could not") || m.startsWith("No video")
-            Text(m, color = if (bad) C.Bad else C.Good, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("My Clips", fontWeight = FontWeight.ExtraBold, fontSize = 24.sp, color = C.Ink)
+            vm.libraryMsg?.let { m ->
+                val bad = m.startsWith("Could not") || m.startsWith("No video")
+                Text(m, color = if (bad) C.Bad else C.Good, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
+            if (vm.library.isEmpty()) {
+                Text("Clips you export appear here and in your Gallery (Movies/ClipForge). Nothing has been saved yet.", color = C.Mute)
+            }
+            // One block per source video, newest first.
+            val groups = vm.library.groupBy { it.source.ifBlank { "Saved clips" } }
+            groups.forEach { (source, clips) ->
+                val first = clips.first()
+                val thumb by rememberThumb(first.uri)
+                Panel {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Box(Modifier.width(96.dp).aspectRatio(16f / 11f).clip(RoundedCornerShape(12.dp)).background(C.Card)) {
+                            val bmp = thumb
+                            if (bmp != null) Image(bmp.asImageBitmap(), source, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+                        }
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(source, color = C.Ink, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, maxLines = 2)
+                            Text("${clips.size} viral clip(s) available", color = C.Cyan, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        }
+                    }
+                }
+                clips.forEach { ClipRow(it, vm, true) }
+            }
         }
-        if (vm.library.isEmpty()) {
-            Text("Clips you export appear here and in your Gallery (Movies/ClipForge). Nothing has been saved yet.", color = C.Mute)
-        } else {
-            Text("${vm.library.size} saved clip(s). They stay here after you close the app.", color = C.Mute, fontSize = 13.sp)
-        }
-        vm.library.forEach { ClipRow(it, vm, true) }
+        GradButton("+  New Clip", Modifier.align(Alignment.BottomEnd).padding(16.dp)) { vm.tab = 0 }
     }
 }
 
