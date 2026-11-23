@@ -625,6 +625,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
         videoReady = true
         paused = false
         failed = false
+        scope.launch { maybeAutoExport() }
     }
 
     // ------------------------------------------------------------ analyze: transcript -> moments -> ranking
@@ -658,14 +659,18 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                         if (p > 0.32f) eta = etaText(t0, p)
                     }
                     val cfg = when (store.stt) {
-                        1 -> store.groqKey.takeIf { it.isNotBlank() }?.let { Speech.CloudCfg(Cloud.Stt.GROQ, it) }
-                        2 -> store.deepgramKey.takeIf { it.isNotBlank() }?.let { Speech.CloudCfg(Cloud.Stt.DEEPGRAM, it) }
+                        1 -> store.groqKey.takeIf { it.isNotBlank() }?.let { Speech.CloudCfg(Cloud.Stt.GROQ, it, store.lang, store.captionEnglish && store.lang != "en") }
+                        2 -> store.deepgramKey.takeIf { it.isNotBlank() }?.let { Speech.CloudCfg(Cloud.Stt.DEEPGRAM, it, store.lang, false) }
                         else -> null
                     }
-                    Diag.log(ctx, "ANALYZE start stt=${cfg?.stt?.label ?: "Offline"} range=${rangeA.toInt()}-${rangeB.toInt()}s")
+                    Diag.log(ctx, "ANALYZE start stt=${cfg?.stt?.label ?: "Offline"} lang=${store.lang} translateToEnglish=${cfg?.translate == true} range=${rangeA.toInt()}-${rangeB.toInt()}s")
+                    if (cfg == null && store.lang != "auto" && store.lang != "en") notice = "Offline mode understands English only. For other languages add a free Groq key in Settings."
                     val cloudTr: Analysis? = if (cfg == null) null else try {
                         Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble(), onStatus, cloud = cfg)
-                            .also { notice = "Transcript made with ${cfg.stt.label}." }
+                            .also {
+                                notice = "Transcript made with ${cfg.stt.label}" + (if (cfg.translate) ", captions translated to English." else ".")
+                                Diag.log(ctx, "ANALYZE cloud done, language=${Cloud.lastLang.ifEmpty { "n/a" }}")
+                            }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
@@ -716,6 +721,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                 } else {
                     phase = "Clips ready to review"
                     stage = Stage.REVIEW
+                    scope.launch { maybeAutoExport() }
                     ClipService.done(ctx, "Clips found", "${found.size} clips are ready to review.")
                 }
                 persist()
@@ -1043,6 +1049,21 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             Diag.log(ctx, "GALLERY scan failed", e)
         }
         return out
+    }
+
+    private var autoExportedFor = ""
+
+    /** Like Opus: once the clips are found AND the video is here, export them without waiting for a tap. */
+    private fun maybeAutoExport() {
+        if (!store.autoExport) return
+        if (stage != Stage.REVIEW || !videoReady || moments.isEmpty()) return
+        if (results.isNotEmpty() || exportStatus.isNotEmpty()) return
+        val key = "$jobUrl|${moments.size}|${moments.first().start.toInt()}"
+        if (key == autoExportedFor) return
+        autoExportedFor = key
+        Diag.log(ctx, "AUTO-EXPORT ${moments.count { it.selected }} clips")
+        render()
+        if (stage == Stage.RENDERING) notice = "Your clips are being exported automatically. They will appear in My Clips."
     }
 
     private fun deleteQuiet(uri: String) {

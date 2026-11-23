@@ -21,9 +21,14 @@ object Cloud {
 
     class Fail(msg: String) : Exception(msg)
 
+    /** Language the service reported for the last chunk (for the log). */
+    @Volatile
+    var lastLang: String = ""
+
     private const val GROQ_STT = "https://api.groq.com/openai/v1/audio/transcriptions"
+    private const val GROQ_TRANSLATE = "https://api.groq.com/openai/v1/audio/translations"
     private const val GROQ_CHAT = "https://api.groq.com/openai/v1/chat/completions"
-    private const val DEEPGRAM = "https://api.deepgram.com/v1/listen?model=nova-3&language=en&punctuate=false&smart_format=false"
+    private const val DEEPGRAM = "https://api.deepgram.com/v1/listen?model=nova-3&punctuate=false&smart_format=false"
     // Model names change over time; if a title request is rejected the app just keeps its own titles.
     private const val GEMINI_MODEL = "gemini-3.8-flash"
     private const val GEMINI = "https://generativelanguage.googleapis.com/v1beta/models/$GEMINI_MODEL:generateContent"
@@ -61,17 +66,38 @@ object Cloud {
     }
 
     /** Transcribes one WAV chunk; returns words with times relative to the start of that chunk. */
-    fun transcribe(stt: Stt, key: String, wav: File): List<Word> {
+    fun transcribe(stt: Stt, key: String, wav: File, lang: String = "auto", translate: Boolean = false): List<Word> {
         return when (stt) {
-            Stt.GROQ -> groq(key, wav)
-            Stt.DEEPGRAM -> deepgram(key, wav)
+            Stt.GROQ -> groq(key, wav, lang, translate)
+            Stt.DEEPGRAM -> deepgram(key, wav, lang)
             Stt.OFFLINE -> throw Fail("No cloud service selected.")
         }
     }
 
-    private fun groq(key: String, wav: File): List<Word> {
+    /** Segment text -> words, with the segment's time spread over its words (used when only segment times exist, e.g. translations). */
+    private fun wordsFromSegments(arr: JSONArray?): List<Word> {
+        val out = ArrayList<Word>()
+        if (arr == null) return out
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val toks = o.optString("text").trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            if (toks.isEmpty()) continue
+            val s = o.getDouble("start")
+            val e = o.getDouble("end")
+            val total = toks.sumOf { it.length + 1 }.toDouble()
+            var t = s
+            for (tok in toks) {
+                val d = (e - s) * (tok.length + 1) / total
+                out.add(Word(tok, t, t + d))
+                t += d
+            }
+        }
+        return out
+    }
+
+    private fun groq(key: String, wav: File, lang: String, translate: Boolean): List<Word> {
         val b = "----clipforge" + System.nanoTime()
-        val c = URL(GROQ_STT).openConnection() as HttpURLConnection
+        val c = URL(if (translate) GROQ_TRANSLATE else GROQ_STT).openConnection() as HttpURLConnection
         try {
             c.requestMethod = "POST"
             c.doOutput = true
@@ -82,10 +108,12 @@ object Cloud {
             c.setChunkedStreamingMode(64 * 1024)
             c.outputStream.use { o ->
                 fun field(n: String, v: String) = o.write("--$b\r\nContent-Disposition: form-data; name=\"$n\"\r\n\r\n$v\r\n".toByteArray())
-                field("model", "whisper-large-v3-turbo")
+                // Translation to English only works with whisper-large-v3 and gives segment times; transcription keeps
+                // the spoken language (auto-detected when no language is given) and gives word times.
+                field("model", if (translate) "whisper-large-v3" else "whisper-large-v3-turbo")
                 field("response_format", "verbose_json")
-                field("timestamp_granularities[]", "word")
-                field("language", "en")
+                if (!translate) field("timestamp_granularities[]", "word")
+                if (!translate && lang != "auto") field("language", lang)
                 field("temperature", "0")
                 o.write("--$b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".toByteArray())
                 FileInputStream(wav).use { it.copyTo(o) }
@@ -93,7 +121,10 @@ object Cloud {
             }
             val body = readAll(c)
             if (c.responseCode != 200) throw Fail(friendly(c.responseCode, body))
-            val arr = JSONObject(body).optJSONArray("words") ?: return emptyList()
+            val j = JSONObject(body)
+            lastLang = j.optString("language", lastLang)
+            val arr = if (translate) null else j.optJSONArray("words")
+            if (arr == null || arr.length() == 0) return wordsFromSegments(j.optJSONArray("segments"))
             return (0 until arr.length()).map { i ->
                 val o = arr.getJSONObject(i)
                 Word(o.getString("word").trim(), o.getDouble("start"), o.getDouble("end"))
@@ -105,8 +136,8 @@ object Cloud {
         }
     }
 
-    private fun deepgram(key: String, wav: File): List<Word> {
-        val c = URL(DEEPGRAM).openConnection() as HttpURLConnection
+    private fun deepgram(key: String, wav: File, lang: String): List<Word> {
+        val c = URL(DEEPGRAM + "&language=" + (if (lang == "auto") "multi" else lang)).openConnection() as HttpURLConnection
         try {
             c.requestMethod = "POST"
             c.doOutput = true

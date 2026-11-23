@@ -29,7 +29,7 @@ object Speech {
     private const val MODEL_URL = "https://alphacephei.com/vosk/models/$MODEL_NAME.zip"
 
     /** Cloud transcription with the person's own key (see [Cloud]). */
-    class CloudCfg(val stt: Cloud.Stt, val key: String)
+    class CloudCfg(val stt: Cloud.Stt, val key: String, val lang: String = "auto", val translate: Boolean = false)
 
     private fun modelDir(ctx: Context) = File(ctx.filesDir, "models/$MODEL_NAME")
 
@@ -168,7 +168,7 @@ object Speech {
                                 val wavFile = File(ctx.cacheDir, "cloud_$k.wav")
                                 try {
                                     Cloud.wav(pcm, wavFile)
-                                    val ws = Cloud.transcribe(cloud.stt, cloud.key, wavFile)
+                                    val ws = Cloud.transcribe(cloud.stt, cloud.key, wavFile, cloud.lang, cloud.translate)
                                     for (w in ws) {
                                         val s0 = w.s + dec.baseS
                                         val e0 = w.e + dec.baseS

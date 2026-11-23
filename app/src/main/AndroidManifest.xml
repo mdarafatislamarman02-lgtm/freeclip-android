@@ -10,8 +10,8 @@
     <application
         android:name=".ClipApp"
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:icon="@mipmap/ic_launcher_cf"
+        android:roundIcon="@mipmap/ic_launcher_cf_round"
         android:label="ClipForge AI"
         android:largeHeap="true"
         android:supportsRtl="true"

@@ -42,6 +42,18 @@ class Store(ctx: Context) {
     var titleAi: Int
         get() = sp.getInt("titleAi", 0)
         set(v) { sp.edit().putInt("titleAi", v).apply() }
+    /** Spoken language of the videos: "auto" (detect) or an ISO code like "en", "bn", "hi". */
+    var lang: String
+        get() = sp.getString("lang", "auto") ?: "auto"
+        set(v) { sp.edit().putString("lang", v).apply() }
+    /** Captions in English even when the video is in another language (needs Groq Whisper). */
+    var captionEnglish: Boolean
+        get() = sp.getBoolean("captionEnglish", true)
+        set(v) { sp.edit().putBoolean("captionEnglish", v).apply() }
+    /** Export the found clips automatically (like Opus) so they appear in My Clips without extra taps. */
+    var autoExport: Boolean
+        get() = sp.getBoolean("autoExport", true)
+        set(v) { sp.edit().putBoolean("autoExport", v).apply() }
     var groqKey: String
         get() = sp.getString("groqKey", "") ?: ""
         set(v) { sp.edit().putString("groqKey", v.trim()).apply() }

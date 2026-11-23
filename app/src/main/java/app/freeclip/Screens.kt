@@ -701,6 +701,25 @@ fun MyClipsScreen(vm: MainVM) {
                 val bad = m.startsWith("Could not") || m.startsWith("No video")
                 Text(m, color = if (bad) C.Bad else C.Good, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
+            if (vm.stage == Stage.RENDERING) {
+                Panel {
+                    Text("Exporting your clips", color = C.Ink, fontWeight = FontWeight.ExtraBold)
+                    Text("They appear below as soon as each one is saved.", color = C.Mute, fontSize = 12.sp)
+                }
+                BusyPanel(vm)
+            } else if (vm.moments.isNotEmpty() && (vm.stage == Stage.REVIEW || vm.stage == Stage.DONE)) {
+                val pending = vm.moments.filter { it.selected && vm.exportStatus[it.id] != "ok" }
+                if (pending.isNotEmpty()) {
+                    Panel {
+                        Text("${pending.size} clip(s) found but not exported yet", color = C.Ink, fontWeight = FontWeight.ExtraBold)
+                        Text(vm.videoName, color = C.Mute, fontSize = 12.sp, maxLines = 1)
+                        if (!vm.videoReady) Text("Waiting for the video to finish downloading (${(vm.dlProgress * 100).toInt()}%).", color = C.Warn, fontSize = 12.sp)
+                        vm.error?.let { Text(it, color = C.Bad, fontSize = 12.sp) }
+                        GradButton("Export now", Modifier.fillMaxWidth(), enabled = vm.videoReady) { vm.render(resume = true) }
+                        GhostButton("Review clips", Modifier.fillMaxWidth()) { vm.tab = 1 }
+                    }
+                }
+            }
             val dups = vm.duplicates()
             if (dups.isNotEmpty()) {
                 GhostButton("Remove ${dups.size} duplicate clip(s)", Modifier.fillMaxWidth()) { vm.removeDuplicates() }
@@ -837,6 +856,38 @@ fun SettingsScreen(vm: MainVM) {
             KeyField("Deepgram key", kDg, "deepgram", "free credit at console.deepgram.com") { kDg = it; vm.store.deepgramKey = it }
             KeyField("Gemini key", kGem, "gemini", "free at aistudio.google.com/apikey") { kGem = it; vm.store.geminiKey = it }
             if (testMsg.isNotEmpty()) Text(testMsg, color = if (testMsg.endsWith("OK")) C.Good else C.Warn, fontSize = 13.sp)
+        }
+        Panel {
+            Label("Language")
+            Text(
+                "Video in another language? Pick Auto-detect. With a Groq key the captions can be translated to English. " +
+                    "Offline mode reads English only.",
+                color = C.Mute, fontSize = 12.sp,
+            )
+            var lang by remember { mutableStateOf(vm.store.lang) }
+            var capEn by remember { mutableStateOf(vm.store.captionEnglish) }
+            var autoEx by remember { mutableStateOf(vm.store.autoExport) }
+            Label("Language spoken in the video")
+            ChipRow {
+                listOf("auto" to "Auto-detect", "en" to "English", "bn" to "Bengali", "hi" to "Hindi", "ur" to "Urdu").forEach { (code, name) ->
+                    Chip(name, lang == code) { lang = code; vm.store.lang = code }
+                }
+            }
+            ChipRow {
+                listOf("es" to "Spanish", "ar" to "Arabic", "pt" to "Portuguese", "ru" to "Russian", "tr" to "Turkish", "id" to "Indonesian").forEach { (code, name) ->
+                    Chip(name, lang == code) { lang = code; vm.store.lang = code }
+                }
+            }
+            Label("Captions")
+            ChipRow {
+                Chip("English", capEn) { capEn = true; vm.store.captionEnglish = true }
+                Chip("Same as the video", !capEn) { capEn = false; vm.store.captionEnglish = false }
+            }
+            Label("After the clips are found")
+            ChipRow {
+                Chip("Export automatically", autoEx) { autoEx = true; vm.store.autoExport = true }
+                Chip("I will tap Export", !autoEx) { autoEx = false; vm.store.autoExport = false }
+            }
         }
         Panel {
             Label("Problems? Send the log")
