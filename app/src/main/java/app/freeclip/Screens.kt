@@ -519,6 +519,9 @@ private fun EditorScreen(vm: MainVM) {
                 LayoutEffect.create(vm.layout, vm.ratio, 540, f, vm.corner)
             }
             val spec = vm.specFor(f)
+            if ((vm.layout == LayoutMode.GAMING || vm.layout == LayoutMode.FACECAM) && Faces.effective(vm.layout, f, vm.corner) == LayoutMode.FILL) {
+                Text("No separate facecam found in this clip, so the full frame is used. If there is one, pick its corner below.", color = C.Warn, fontSize = 12.sp)
+            }
             val cues = remember(m.start, m.end, vm.captions, vm.presetIdx) {
                 if (vm.captions) Renderer.captionCues(vm.wordsFor(m), m.start, m.end, vm.preset.upper) else emptyList()
             }

@@ -21,31 +21,47 @@ import androidx.media3.effect.GlShaderProgram
  * Where the speaker / facecam is, found by sampling a few frames. All values are 0..1,
  * x to the right and y UP (image coordinates as OpenGL sees them).
  */
-class FaceInfo(val panX: Float, val camCx: Float?, val camCy: Float?) {
+class FaceInfo(
+    val panX: Float,
+    val camCx: Float?,
+    val camCy: Float?,
+    /** Width of the facecam box as a fraction of the frame (from the face size), when a facecam was found. */
+    val camW: Float? = null,
+    /** Aspect (w/h) of the source video, needed to size the facecam crop. */
+    val aspect: Float = 16f / 9f,
+) {
+    /** True only when a small, steady face (a webcam overlay) was really found in several frames. */
+    val hasCam: Boolean get() = camCx != null && camCy != null
+
     companion object {
         val NONE = FaceInfo(0.5f, null, null)
     }
 }
 
 object Faces {
-    /** Samples 6 frames across the clip. Never throws: on any problem it returns [FaceInfo.NONE]. */
+    private class Hit(val x: Float, val y: Float, val size: Float)
+
+    /**
+     * Samples 8 frames across the clip. A facecam = a SMALL face that shows up at about the same spot in at least 3 frames;
+     * a big face means the speaker fills the screen (then the picture just follows the face). Never throws.
+     */
     fun analyze(ctx: Context, uri: Uri, startS: Double, endS: Double, aspect: Float): FaceInfo {
         val r = MediaMetadataRetriever()
         val bigX = ArrayList<Float>()
-        val camX = ArrayList<Float>()
-        val camY = ArrayList<Float>()
+        val small = ArrayList<Hit>()
         try {
             r.setDataSource(ctx, uri)
-            val w = 480
+            val w = 960
             val h = ((w / aspect).toInt() / 2) * 2
-            for (k in 0 until 6) {
-                val t = ((startS + (endS - startS) * (k + 0.5) / 6) * 1e6).toLong()
+            val n8 = 8
+            for (k in 0 until n8) {
+                val t = ((startS + (endS - startS) * (k + 0.5) / n8) * 1e6).toLong()
                 val raw = r.getScaledFrameAtTime(t, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h) ?: continue
                 val b565 = raw.copy(Bitmap.Config.RGB_565, false) ?: continue
                 val ew = b565.width and 1.inv()
                 val bmp = if (ew != b565.width) Bitmap.createBitmap(b565, 0, 0, ew, b565.height) else b565
-                val faces = arrayOfNulls<FaceDetector.Face>(4)
-                val n = FaceDetector(bmp.width, bmp.height, 4).findFaces(bmp, faces)
+                val faces = arrayOfNulls<FaceDetector.Face>(6)
+                val n = FaceDetector(bmp.width, bmp.height, 6).findFaces(bmp, faces)
                 var best = -1f
                 var bestX = 0.5f
                 for (i in 0 until n) {
@@ -56,9 +72,11 @@ object Faces {
                     val x = mid.x / bmp.width
                     val y = 1f - mid.y / bmp.height
                     val size = f.eyesDistance() / bmp.width
-                    if (size > best) { best = size; bestX = x }
-                    val inCorner = (x < 0.38f || x > 0.62f) && (y < 0.42f || y > 0.58f)
-                    if (inCorner && size < 0.07f) { camX.add(x); camY.add(y) }
+                    if (size >= 0.07f) {
+                        if (size > best) { best = size; bestX = x }
+                    } else if (size >= 0.008f) {
+                        small.add(Hit(x, y, size))
+                    }
                 }
                 if (best > 0) bigX.add(bestX)
             }
@@ -67,13 +85,35 @@ object Faces {
             try { r.release() } catch (_: Throwable) {}
         }
         fun med(l: List<Float>): Float? = if (l.isEmpty()) null else l.sorted()[l.size / 2]
-        return FaceInfo(med(bigX) ?: 0.5f, med(camX), med(camY))
+        // Largest group of small faces at about the same place.
+        var bestGroup: List<Hit> = emptyList()
+        for (c in small) {
+            val g = small.filter { kotlin.math.abs(it.x - c.x) < 0.08f && kotlin.math.abs(it.y - c.y) < 0.10f }
+            if (g.size > bestGroup.size) bestGroup = g
+        }
+        val panX = med(bigX) ?: 0.5f
+        return if (bestGroup.size >= 3 && bigX.size < 3) {
+            FaceInfo(panX, med(bestGroup.map { it.x }), med(bestGroup.map { it.y }), med(bestGroup.map { it.size }), aspect)
+        } else {
+            FaceInfo(panX, null, null, null, aspect)
+        }
     }
 
-    /** The facecam rectangle (x0, y0, x1, y1) for a corner: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right, 4 auto. */
-    fun camRect(corner: Int, face: FaceInfo): FloatArray {
-        val w = 0.30f
-        val h = 0.34f
+    /**
+     * What is really drawn: Gaming / Facecam need a facecam. If none was found (and no corner was chosen by hand),
+     * the full frame is used, instead of showing a zoomed copy of the same picture twice.
+     */
+    fun effective(layout: LayoutMode, face: FaceInfo, corner: Int): LayoutMode =
+        if ((layout == LayoutMode.GAMING || layout == LayoutMode.FACECAM) && corner == 4 && !face.hasCam) LayoutMode.FILL else layout
+
+    /**
+     * The facecam rectangle (x0, y0, x1, y1) for a corner: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right, 4 auto.
+     * [boxAspect] is the shape (w/h) of the box it is drawn into, so the region is cut to the same shape and nothing is squashed.
+     */
+    fun camRect(corner: Int, face: FaceInfo, boxAspect: Float): FloatArray {
+        val auto = corner == 4 && face.camCx != null && face.camCy != null
+        val w = if (auto) (face.camW?.let { it * 7.5f } ?: 0.28f).coerceIn(0.14f, 0.40f) else 0.30f
+        val h = (w * face.aspect / boxAspect).coerceIn(0.10f, 0.95f)
         val cx: Float
         val cy: Float
         when (corner) {
@@ -82,7 +122,7 @@ object Faces {
             2 -> { cx = w / 2; cy = h / 2 }
             3 -> { cx = 1 - w / 2; cy = h / 2 }
             else -> {
-                if (face.camCx != null && face.camCy != null) { cx = face.camCx; cy = face.camCy }
+                if (auto) { cx = face.camCx!!; cy = face.camCy!! }
                 else { cx = w / 2; cy = 1 - h / 2 }
             }
         }
@@ -112,7 +152,9 @@ class LayoutEffect(
     companion object {
         fun create(layout: LayoutMode, ratio: Ratio, side: Int, face: FaceInfo, corner: Int): LayoutEffect {
             val (w, h) = ratio.size(side)
-            return LayoutEffect(layout.shader, w, h, face.panX, Faces.camRect(corner, face), Faces.split(ratio))
+            val mode = Faces.effective(layout, face, corner)
+            val box = if (mode == LayoutMode.FACECAM) ratio.aspect else ratio.aspect / Faces.split(ratio)
+            return LayoutEffect(mode.shader, w, h, face.panX, Faces.camRect(corner, face, box), Faces.split(ratio))
         }
     }
 }

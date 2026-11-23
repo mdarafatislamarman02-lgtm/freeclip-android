@@ -662,6 +662,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                         2 -> store.deepgramKey.takeIf { it.isNotBlank() }?.let { Speech.CloudCfg(Cloud.Stt.DEEPGRAM, it) }
                         else -> null
                     }
+                    Diag.log(ctx, "ANALYZE start stt=${cfg?.stt?.label ?: "Offline"} range=${rangeA.toInt()}-${rangeB.toInt()}s")
                     val cloudTr: Analysis? = if (cfg == null) null else try {
                         Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble(), onStatus, cloud = cfg)
                             .also { notice = "Transcript made with ${cfg.stt.label}." }
@@ -815,6 +816,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             begin()
             try {
                 var simpleCount = 0
+                var noCam = 0
                 val hasAudio = withContext(Dispatchers.IO) { ExportCheck.sourceHasAudio(ctx, uri) }
                 for ((n, m) in todo.withIndex()) {
                     report("Clip ${n + 1} of ${todo.size}: ${layout.label}, ${ratio.label}, ${res}p", n.toFloat() / todo.size)
@@ -832,6 +834,10 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                             } catch (e: Throwable) {
                                 Diag.log(ctx, "FACE failed (using centre crop)", e)
                                 FaceInfo.NONE
+                            }
+                            if ((layout == LayoutMode.GAMING || layout == LayoutMode.FACECAM) && Faces.effective(layout, face, corner) == LayoutMode.FILL) {
+                                noCam++
+                                Diag.log(ctx, "LAYOUT clip ${m.id}: no facecam found, using the full frame")
                             }
                             // Attempt 1: the full layout. Attempt 2: the plain centre-crop path that worked in the first version.
                             val simple = attempt == 2
@@ -874,6 +880,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                 val bad = todo.count { exportStatus[it.id]?.startsWith("fail") == true }
                 progress = 1f
                 Diag.log(ctx, "EXPORT done ok=${todo.size - bad} failed=$bad simple=$simpleCount")
+                if (noCam > 0) notice = "$noCam clip(s) have no separate facecam, so they use the full frame instead of showing the same picture twice. If your video has a facecam, pick its corner under \"Where is the facecam\"."
                 if (simpleCount > 0) notice = "$simpleCount clip(s) were made with the simple centre crop because the full layout could not be rendered on this phone."
                 if (bad == 0) {
                     phase = "Completed"

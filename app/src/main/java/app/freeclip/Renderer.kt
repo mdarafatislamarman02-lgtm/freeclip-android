@@ -142,7 +142,7 @@ object Renderer {
 
     /** Normalised (-1..1, y up) vertical position of the captions. */
     fun captionY(spec: ExportSpec): Float =
-        if (spec.layout == LayoutMode.GAMING) 1f - 2f * Faces.split(spec.ratio) else -0.30f
+        if (Faces.effective(spec.layout, spec.face, spec.corner) == LayoutMode.GAMING) 1f - 2f * Faces.split(spec.ratio) else -0.30f
 
     /** Cuts [startS, endS] from [uri], lays it out and burns in captions/title. */
     @OptIn(UnstableApi::class)
