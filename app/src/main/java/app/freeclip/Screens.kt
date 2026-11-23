@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import android.net.Uri
@@ -434,6 +435,13 @@ private fun ReviewCard(vm: MainVM) {
             }
             Text(m.reasons.joinToString("  |  "), color = C.Cyan, fontSize = 12.sp)
             ExportBadge(vm.exportStatus[m.id])
+            if (m.desc.isNotBlank()) Text(m.desc, color = C.Ink, fontSize = 13.sp)
+            if (m.tags.isNotBlank()) Text(m.tags, color = C.Cyan, fontSize = 12.sp)
+            if (m.desc.isNotBlank() || m.tags.isNotBlank()) {
+                OutlinedButton(onClick = { vm.copyPost(m.title, m.desc, m.tags) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Copy title + description + hashtags")
+                }
+            }
             Text(m.text.take(200) + if (m.text.length > 200) "..." else "", color = C.Mute, fontSize = 12.sp)
             GradButton("Edit and preview", Modifier.fillMaxWidth(), enabled = vm.videoReady) { vm.editIdx = i }
         }
@@ -552,6 +560,19 @@ private fun EditorScreen(vm: MainVM) {
                 label = { Text("Title") }, modifier = Modifier.fillMaxWidth(),
                 colors = fieldColors(), shape = RoundedCornerShape(14.dp),
             )
+            OutlinedTextField(
+                value = m.desc, onValueChange = { vm.redesc(i, it.take(300)) },
+                label = { Text("Description") }, modifier = Modifier.fillMaxWidth(), minLines = 2,
+                colors = fieldColors(), shape = RoundedCornerShape(14.dp),
+            )
+            OutlinedTextField(
+                value = m.tags, onValueChange = { vm.retags(i, it.take(200)) },
+                label = { Text("Hashtags") }, modifier = Modifier.fillMaxWidth(),
+                colors = fieldColors(), shape = RoundedCornerShape(14.dp),
+            )
+            OutlinedButton(onClick = { vm.copyPost(m.title, m.desc, m.tags) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Copy title + description + hashtags")
+            }
             Toggle("Show title for 3 seconds", vm.showTitle) { vm.showTitle = it }
             TrimRow("Start", m.start, { vm.trim(i, -1.0, 0.0) }, { vm.trim(i, 1.0, 0.0) })
             TrimRow("End", m.end, { vm.trim(i, 0.0, -1.0) }, { vm.trim(i, 0.0, 1.0) })
@@ -659,6 +680,13 @@ fun ClipRow(c: LibraryClip, vm: MainVM, deletable: Boolean) {
                         Text(c.layout, color = C.Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
+            }
+        }
+        if (c.desc.isNotBlank()) Text(c.desc, color = C.Ink, fontSize = 13.sp, maxLines = 3)
+        if (c.tags.isNotBlank()) Text(c.tags, color = C.Cyan, fontSize = 12.sp, maxLines = 2)
+        if (c.desc.isNotBlank() || c.tags.isNotBlank()) {
+            OutlinedButton(onClick = { vm.copyPost(c.title, c.desc, c.tags) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Copy title + description + hashtags")
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -833,7 +861,7 @@ fun SettingsScreen(vm: MainVM) {
                 Chip("Groq Whisper", tStt == 1) { tStt = 1; vm.store.stt = 1 }
                 Chip("Deepgram", tStt == 2) { tStt = 2; vm.store.stt = 2 }
             }
-            Label("Titles")
+            Label("Titles + description + hashtags")
             ChipRow {
                 Chip("Built-in", tTitle == 0) { tTitle = 0; vm.store.titleAi = 0 }
                 Chip("Groq Llama 3.3", tTitle == 1) { tTitle = 1; vm.store.titleAi = 1 }

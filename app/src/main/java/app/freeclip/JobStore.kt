@@ -60,6 +60,7 @@ object JobStore {
                     JSONObject().put("id", x.id).put("start", x.start).put("end", x.end).put("score", x.score)
                         .put("title", x.title).put("text", x.text).put("reasons", JSONArray(x.reasons))
                         .put("hook", x.hook).put("engagement", x.engagement).put("selected", x.selected)
+                        .put("desc", x.desc).put("tags", x.tags)
                 )
             }
             val ex = JSONObject()
@@ -95,6 +96,7 @@ object JobStore {
                     reasons = (0 until r.length()).map { i -> r.getString(i) },
                     hook = x.optInt("hook", 0), engagement = x.optInt("engagement", 0),
                     selected = x.optBoolean("selected", true),
+                    desc = x.optString("desc", ""), tags = x.optString("tags", ""),
                 )
             }
             val ex = HashMap<Int, String>()

@@ -89,6 +89,19 @@ object Moments {
         return if (ws.size > 8) "$t..." else t
     }
 
+    /** Offline description (first sentences) and hashtags (frequent keywords + #shorts). The AI versions are better; this is the fallback. */
+    fun describe(text: String): Pair<String, String> {
+        val clean = text.trim().replace(Regex("\\s+"), " ")
+        val desc = if (clean.length <= 180) clean else clean.take(180).substringBeforeLast(' ') + "..."
+        val freq = HashMap<String, Int>()
+        for (m in WORD.findAll(clean.lowercase())) {
+            val w = m.value
+            if (w.length >= 5 && w !in STOP && w.all { it.isLetter() }) freq[w] = (freq[w] ?: 0) + 1
+        }
+        val tags = freq.entries.sortedByDescending { it.value }.take(5).map { "#" + it.key } + listOf("#shorts", "#viral")
+        return desc to tags.joinToString(" ")
+    }
+
     private fun clip01(x: Double) = max(0.0, min(1.0, x))
 
     private fun energyBetween(energy: FloatArray, hop: Double, a: Double, b: Double): Pair<Double, Double> {
@@ -205,6 +218,8 @@ object Moments {
                     score = c.score.toInt().coerceIn(0, 99),
                     title = makeTitle(c.win),
                     text = c.win.joinToString(" ") { it.text },
+                    desc = describe(c.win.joinToString(" ") { it.text }).first,
+                    tags = describe(c.win.joinToString(" ") { it.text }).second,
                     reasons = top.ifEmpty { listOf("steady, complete passage") },
                     hook = (f.getValue("hook") * 100).toInt().coerceIn(0, 99),
                     engagement = ((f.getValue("emotion") + f.getValue("energy") + f.getValue("pace")) / 3 * 100).toInt().coerceIn(0, 99),

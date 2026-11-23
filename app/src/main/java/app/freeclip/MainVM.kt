@@ -689,6 +689,11 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                         report("Retrying with the simple method...", 0f)
                         Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble(), onStatus, maxParts = 1)
                     }
+                    if (cloudTr == null && store.lang != "en" && tr.words.size >= 20 && tr.meanConf < 0.8) {
+                        // Heuristic (threshold not verified on real devices): the English-only model is unsure about most words.
+                        Diag.log(ctx, "LOWCONF offline meanConf=${"%.2f".format(tr.meanConf)} words=${tr.words.size}")
+                        notice = "This video does not sound like English, so the captions and titles may be wrong. For Hindi and other languages add a free Groq key in Settings > Faster, better results, then analyse again."
+                    }
                     tr.also {
                         analysis = it
                         analysisA = rangeA
@@ -755,6 +760,22 @@ class MainVM(app: Application) : AndroidViewModel(app) {
 
     fun retitle(i: Int, t: String) {
         moments[i] = moments[i].copy(title = t)
+    }
+
+    fun redesc(i: Int, d: String) {
+        moments[i] = moments[i].copy(desc = d)
+    }
+
+    fun retags(i: Int, t: String) {
+        moments[i] = moments[i].copy(tags = t)
+    }
+
+    /** Copies "title, description, hashtags" to the clipboard, ready to paste into TikTok / Shorts / Reels. */
+    fun copyPost(title: String, desc: String, tags: String) {
+        val txt = listOf(title, desc, tags).filter { it.isNotBlank() }.joinToString("\n\n")
+        val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("ClipForge post", txt))
+        android.widget.Toast.makeText(ctx, "Copied title, description and hashtags.", android.widget.Toast.LENGTH_SHORT).show()
     }
 
     /** Nudge a clip's start/end by seconds, keeping it inside the video and at least 5 s long. */
@@ -866,6 +887,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                                 id = System.currentTimeMillis().toString() + "_" + m.id,
                                 title = m.title, uri = saved.toString(), seconds = m.end - m.start,
                                 created = System.currentTimeMillis(), layout = layout.label, score = m.score, source = videoName, startS = m.start, endS = m.end,
+                                desc = m.desc, tags = m.tags,
                             )
                             results.add(clip)
                             library.add(0, clip)
@@ -932,11 +954,19 @@ class MainVM(app: Application) : AndroidViewModel(app) {
     private fun saveToGallery(file: File, title: String): Uri =
         saveViaMediaStore(file, title, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "Movies/ClipForge", "ClipForge")
 
-    private fun saveViaMediaStore(file: File, title: String, collection: Uri, folder: String, prefix: String): Uri {
+    private fun downloadExists(name: String): Boolean = try {
+        ctx.contentResolver.query(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.MediaColumns._ID),
+            "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+            arrayOf(name, "Download/ClipForge%"), null,
+        )?.use { it.moveToFirst() } ?: false
+    } catch (_: Exception) { false }
+
+    private fun saveViaMediaStore(file: File, title: String, collection: Uri, folder: String, prefix: String, fixedName: String? = null): Uri {
         val resolver = ctx.contentResolver
         val safe = title.replace(Regex("[^A-Za-z0-9 ]"), "").trim().take(30).ifEmpty { "clip" }
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "${prefix}_${System.currentTimeMillis() / 1000}_$safe.mp4")
+            put(MediaStore.MediaColumns.DISPLAY_NAME, fixedName ?: "${prefix}_${System.currentTimeMillis() / 1000}_$safe.mp4")
             put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
             put(MediaStore.MediaColumns.RELATIVE_PATH, folder)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
@@ -979,12 +1009,14 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             try {
                 val msg = withContext(Dispatchers.IO) {
                     val tmp = File(ctx.cacheDir, "copy_${c.id}.mp4")
+                    val dlName = "ClipForge_${c.id}.mp4"
+                    if (downloadExists(dlName)) return@withContext "Already saved in Downloads/ClipForge. (The Gallery also shows the copy in Movies/ClipForge, so one clip can appear twice there.)"
                     try {
                         ctx.contentResolver.openInputStream(Uri.parse(c.uri))?.use { i -> tmp.outputStream().use { i.copyTo(it) } }
                             ?: throw IllegalStateException("The clip file could not be opened. It may have been deleted from the Gallery.")
                         if (tmp.length() < 20_000) throw IllegalStateException("The clip file is empty or damaged.")
-                        saveViaMediaStore(tmp, c.title, MediaStore.Downloads.EXTERNAL_CONTENT_URI, "Download/ClipForge", "ClipForge")
-                        "Saved a copy to Downloads/ClipForge (${tmp.length() / 1024} KB)."
+                        saveViaMediaStore(tmp, c.title, MediaStore.Downloads.EXTERNAL_CONTENT_URI, "Download/ClipForge", "ClipForge", dlName)
+                        "Saved a copy to Downloads/ClipForge (${tmp.length() / 1024} KB). The Gallery also shows the Movies/ClipForge copy."
                     } finally {
                         tmp.delete()
                     }

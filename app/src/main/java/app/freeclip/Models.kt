@@ -1,6 +1,6 @@
 package app.freeclip
 
-data class Word(val w: String, val s: Double, val e: Double)
+data class Word(val w: String, val s: Double, val e: Double, val conf: Double = 1.0)
 
 data class Moment(
     val id: Int,
@@ -14,6 +14,8 @@ data class Moment(
     val engagement: Int,
     val selected: Boolean = true,
     val captionEdit: String? = null,
+    val desc: String = "",
+    val tags: String = "",
 )
 
 /** A finished clip saved in the phone's Gallery and listed in My Clips. */
@@ -29,10 +31,15 @@ data class LibraryClip(
     /** The part of the source video this clip was cut from (used to avoid saving the same clip twice). */
     val startS: Double = -1.0,
     val endS: Double = -1.0,
+    val desc: String = "",
+    val tags: String = "",
 )
 
 /** Speech + loudness for the analysed part of the video. [energy] is 0..1 per [hop] seconds, aligned to video time. */
-class Analysis(val words: List<Word>, val energy: FloatArray, val hop: Double)
+class Analysis(val words: List<Word>, val energy: FloatArray, val hop: Double) {
+    /** Average recogniser confidence (Vosk only; cloud words count as 1.0). */
+    val meanConf: Double get() = if (words.isEmpty()) 1.0 else words.sumOf { it.conf } / words.size
+}
 
 enum class LayoutMode(val label: String, val hint: String, val shader: Int, val needsCam: Boolean) {
     FILL("Fill", "Crop to fill the screen", 0, false),

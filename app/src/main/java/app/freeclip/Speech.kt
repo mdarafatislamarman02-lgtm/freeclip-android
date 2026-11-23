@@ -191,7 +191,7 @@ object Speech {
                                     val s = o.getDouble("start") + dec.baseS
                                     val e = o.getDouble("end") + dec.baseS
                                     val mid = (s + e) / 2
-                                    if (mid >= keepLo && mid < keepHi) out.add(Word(o.getString("word"), s, e))
+                                    if (mid >= keepLo && mid < keepHi) out.add(Word(o.getString("word"), s, e, o.optDouble("conf", 1.0)))
                                 }
                             }
                             try {

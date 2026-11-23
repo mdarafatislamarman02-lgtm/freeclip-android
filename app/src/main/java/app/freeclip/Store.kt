@@ -40,7 +40,7 @@ class Store(ctx: Context) {
         set(v) { sp.edit().putInt("stt", v).apply() }
     /** 0 = built-in titles, 1 = Groq Llama, 2 = Gemini. */
     var titleAi: Int
-        get() = sp.getInt("titleAi", 0)
+        get() = if (sp.contains("titleAi")) sp.getInt("titleAi", 0) else if (geminiKey.isNotBlank()) 2 else if (groqKey.isNotBlank()) 1 else 0
         set(v) { sp.edit().putInt("titleAi", v).apply() }
     /** Spoken language of the videos: "auto" (detect) or an ISO code like "en", "bn", "hi". */
     var lang: String
@@ -73,6 +73,7 @@ class Store(ctx: Context) {
                     o.getString("id"), o.getString("title"), o.getString("uri"),
                     o.getDouble("seconds"), o.getLong("created"),
                     o.optString("layout", ""), o.optInt("score", 0), o.optString("source", ""), o.optDouble("startS", -1.0), o.optDouble("endS", -1.0),
+                    o.optString("desc", ""), o.optString("tags", ""),
                 )
             }
         }
@@ -87,7 +88,7 @@ class Store(ctx: Context) {
                 arr.put(
                     JSONObject().put("id", c.id).put("title", c.title).put("uri", c.uri)
                         .put("seconds", c.seconds).put("created", c.created)
-                        .put("layout", c.layout).put("score", c.score).put("source", c.source).put("startS", c.startS).put("endS", c.endS)
+                        .put("layout", c.layout).put("score", c.score).put("source", c.source).put("startS", c.startS).put("endS", c.endS).put("desc", c.desc).put("tags", c.tags)
                 )
             }
             libFile.writeText(arr.toString())

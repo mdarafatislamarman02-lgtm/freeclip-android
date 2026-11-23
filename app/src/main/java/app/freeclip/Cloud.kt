@@ -191,17 +191,29 @@ object Cloud {
         if (!useGroq && !useGemini) return moments
         return try {
             val prompt = StringBuilder(
-                "You write titles for short vertical videos (TikTok / Shorts). For each numbered transcript below write ONE punchy, " +
-                    "curiosity-driven title of at most 8 words that matches what is really said. No quotes, no hashtags, no emojis. " +
-                    "Return only JSON: {\"titles\":[\"...\", ...]} with exactly ${moments.size} titles in the same order.\n\n"
+                "You write the post text for short vertical videos (TikTok / Shorts / Reels). For each numbered transcript below write: " +
+                    "a punchy curiosity-driven title of at most 8 words (no quotes, no hashtags, no emojis); " +
+                    "a description of 1-2 sentences, at most 200 characters, that matches what is really said; " +
+                    "and 5-8 relevant hashtags (each starting with #, no spaces, include #shorts). Write in English. " +
+                    "Return only JSON: {\"clips\":[{\"title\":\"...\",\"description\":\"...\",\"hashtags\":[\"#a\",\"#b\"]}, ...]} " +
+                    "with exactly ${moments.size} items in the same order.\n\n"
             )
-            moments.forEachIndexed { i, m -> prompt.append("${i + 1}. ").append(m.text.take(400)).append("\n") }
+            moments.forEachIndexed { i, m -> prompt.append("${i + 1}. ").append(m.text.take(600)).append("\n") }
             val text = if (useGroq) groqChat(store.groqKey, prompt.toString()) else gemini(store.geminiKey, prompt.toString())
-            val arr = JSONObject(text).getJSONArray("titles")
-            if (arr.length() != moments.size) throw Fail("The AI returned ${arr.length()} titles for ${moments.size} clips.")
+            val arr = JSONObject(text).getJSONArray("clips")
+            if (arr.length() != moments.size) throw Fail("The AI returned ${arr.length()} items for ${moments.size} clips.")
             moments.mapIndexed { i, m ->
-                val t = arr.getString(i).replace(Regex("[\"\\n]"), "").trim().take(70)
-                if (t.length >= 3) m.copy(title = t) else m
+                val o = arr.getJSONObject(i)
+                val t = o.optString("title").replace(Regex("[\"\\n]"), "").trim().take(70)
+                val d = o.optString("description").replace(Regex("\\s+"), " ").trim().take(240)
+                val hs = o.optJSONArray("hashtags")
+                val tags = if (hs == null) "" else (0 until hs.length()).map { hs.optString(it).trim().replace(" ", "").trimStart('#') }
+                    .filter { it.length in 2..30 }.take(8).joinToString(" ") { "#$it" }
+                m.copy(
+                    title = if (t.length >= 3) t else m.title,
+                    desc = if (d.length >= 10) d else m.desc,
+                    tags = if (tags.isNotBlank()) tags else m.tags,
+                )
             }
         } catch (e: Exception) {
             Diag.log(ctx, "TITLES failed (kept the built-in titles)", e)
