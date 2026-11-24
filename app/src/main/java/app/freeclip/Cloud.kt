@@ -25,6 +25,79 @@ object Cloud {
     @Volatile
     var lastLang: String = ""
 
+    /** Language found for the current job (Groq auto-detect) and a note for the log. */
+    @Volatile
+    private var jobLang: String? = null
+    @Volatile
+    var jobNote: String = ""
+
+    fun resetJob() { jobLang = null; jobNote = ""; lastLang = "" }
+
+    private val LANG_CODES = mapOf(
+        "english" to "en", "hindi" to "hi", "bengali" to "bn", "urdu" to "ur", "spanish" to "es", "arabic" to "ar",
+        "portuguese" to "pt", "russian" to "ru", "turkish" to "tr", "indonesian" to "id", "french" to "fr", "german" to "de",
+        "italian" to "it", "japanese" to "ja", "korean" to "ko", "chinese" to "zh", "tamil" to "ta", "telugu" to "te",
+        "marathi" to "mr", "punjabi" to "pa", "gujarati" to "gu", "nepali" to "ne", "persian" to "fa", "thai" to "th",
+        "vietnamese" to "vi", "dutch" to "nl", "polish" to "pl", "ukrainian" to "uk", "malay" to "ms", "tagalog" to "tl",
+    )
+
+    /**
+     * Whisper only listens to the first 30 s to guess the language, and a video often starts with music or an English intro.
+     * So the language is found once per job from 30 s taken from the MIDDLE of the audio, with the larger model, and then
+     * forced for every chunk. Returns null if it could not be found (then Whisper's own guess is used).
+     */
+    @Synchronized
+    private fun detectLanguage(key: String, wav: File): String? {
+        jobLang?.let { return it.takeIf { c -> c.isNotEmpty() } }
+        var slice: File? = null
+        var out: File? = null
+        try {
+            val pcmBytes = wav.length() - 44
+            val want = 30L * AudioDecoder.RATE * 2
+            val len = minOf(want, pcmBytes)
+            val start = ((pcmBytes - len) / 2) and 1L.inv()
+            slice = File(wav.parentFile, "lang_${System.nanoTime()}.pcm")
+            java.io.RandomAccessFile(wav, "r").use { f ->
+                f.seek(44 + start)
+                val buf = ByteArray(len.toInt())
+                f.readFully(buf)
+                slice.writeBytes(buf)
+            }
+            out = File(wav.parentFile, "lang_${System.nanoTime()}.wav")
+            wav(slice, out)
+            val b = "----clipforge" + System.nanoTime()
+            val c = URL(GROQ_STT).openConnection() as HttpURLConnection
+            try {
+                c.requestMethod = "POST"; c.doOutput = true; c.connectTimeout = 15_000; c.readTimeout = 60_000
+                c.setRequestProperty("Authorization", "Bearer $key")
+                c.setRequestProperty("Content-Type", "multipart/form-data; boundary=$b")
+                c.outputStream.use { o ->
+                    fun field(n: String, v: String) = o.write("--$b\r\nContent-Disposition: form-data; name=\"$n\"\r\n\r\n$v\r\n".toByteArray())
+                    field("model", "whisper-large-v3")
+                    field("response_format", "verbose_json")
+                    field("temperature", "0")
+                    o.write("--$b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".toByteArray())
+                    FileInputStream(out).use { it.copyTo(o) }
+                    o.write("\r\n--$b--\r\n".toByteArray())
+                }
+                val body = readAll(c)
+                if (c.responseCode != 200) throw Fail(friendly(c.responseCode, body))
+                val name = JSONObject(body).optString("language").trim().lowercase()
+                val code = if (name.length == 2) name else LANG_CODES[name]
+                jobNote = "detected '$name'" + (if (code != null) " -> $code" else " (not in the list, Whisper auto is used)")
+                jobLang = code ?: ""
+                return code
+            } finally {
+                c.disconnect()
+            }
+        } catch (e: Exception) {
+            jobNote = "detect failed: ${e.message ?: e.javaClass.simpleName}"
+            return null
+        } finally {
+            slice?.delete(); out?.delete()
+        }
+    }
+
     private const val GROQ_STT = "https://api.groq.com/openai/v1/audio/transcriptions"
     private const val GROQ_TRANSLATE = "https://api.groq.com/openai/v1/audio/translations"
     private const val GROQ_CHAT = "https://api.groq.com/openai/v1/chat/completions"
@@ -113,7 +186,8 @@ object Cloud {
                 field("model", if (translate) "whisper-large-v3" else "whisper-large-v3-turbo")
                 field("response_format", "verbose_json")
                 if (!translate) field("timestamp_granularities[]", "word")
-                if (!translate && lang != "auto") field("language", lang)
+                val useLang = if (!translate && lang == "auto") detectLanguage(key, wav) ?: "auto" else lang
+                if (!translate && useLang != "auto") field("language", useLang)
                 field("temperature", "0")
                 o.write("--$b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".toByteArray())
                 FileInputStream(wav).use { it.copyTo(o) }
@@ -199,7 +273,29 @@ object Cloud {
                     "with exactly ${moments.size} items in the same order.\n\n"
             )
             moments.forEachIndexed { i, m -> prompt.append("${i + 1}. ").append(m.text.take(600)).append("\n") }
-            val text = if (useGroq) groqChat(store.groqKey, prompt.toString()) else gemini(store.geminiKey, prompt.toString())
+            // Retry a busy service (503/429), then try the other AI if its key is set.
+            fun ask(groqFirst: Boolean): String {
+                var last: Exception? = null
+                for (attempt in 0 until 3) {
+                    try {
+                        return if (groqFirst) groqChat(store.groqKey, prompt.toString()) else gemini(store.geminiKey, prompt.toString())
+                    } catch (e: Fail) {
+                        last = e
+                        val busy = e.message?.contains("Service error") == true || e.message?.contains("busy", true) == true || e.message?.contains("Too many", true) == true || e.message?.contains("free limit") == true
+                        if (!busy) break
+                        Thread.sleep(2000L * (attempt + 1))
+                    }
+                }
+                throw last ?: Fail("AI request failed.")
+            }
+            val text = try {
+                ask(useGroq)
+            } catch (e: Fail) {
+                val other = if (useGroq) store.geminiKey.isNotBlank() else store.groqKey.isNotBlank()
+                if (!other) throw e
+                Diag.log(ctx, "TITLES first AI failed (${e.message}), trying the other one")
+                ask(!useGroq)
+            }
             val arr = JSONObject(text).getJSONArray("clips")
             if (arr.length() != moments.size) throw Fail("The AI returned ${arr.length()} items for ${moments.size} clips.")
             moments.mapIndexed { i, m ->

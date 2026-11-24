@@ -41,8 +41,40 @@ class FaceInfo(
 object Faces {
     private class Hit(val x: Float, val y: Float, val size: Float)
 
+    /** ML Kit (offline, bundled model): finds small and tilted faces much better than the old platform detector. Null = it failed. */
+    private fun detectMl(det: com.google.mlkit.vision.face.FaceDetector, raw: Bitmap): List<Hit>? = try {
+        val bmp = if (raw.config == Bitmap.Config.ARGB_8888) raw else raw.copy(Bitmap.Config.ARGB_8888, false)
+        val faces = com.google.android.gms.tasks.Tasks.await(
+            det.process(com.google.mlkit.vision.common.InputImage.fromBitmap(bmp, 0)), 8, java.util.concurrent.TimeUnit.SECONDS,
+        )
+        faces.map {
+            val b = it.boundingBox
+            // size is stored as "eye distance / width" (about 0.45 x the face width) so the old thresholds still apply.
+            Hit(b.centerX().toFloat() / bmp.width, 1f - b.centerY().toFloat() / bmp.height, b.width().toFloat() / bmp.width * 0.45f)
+        }
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun detectLegacy(raw: Bitmap): List<Hit> = try {
+        val b565 = raw.copy(Bitmap.Config.RGB_565, false)
+        val ew = b565.width and 1.inv()
+        val bmp = if (ew != b565.width) Bitmap.createBitmap(b565, 0, 0, ew, b565.height) else b565
+        val faces = arrayOfNulls<FaceDetector.Face>(6)
+        val n = FaceDetector(bmp.width, bmp.height, 6).findFaces(bmp, faces)
+        (0 until n).mapNotNull { i ->
+            val f = faces[i] ?: return@mapNotNull null
+            if (f.confidence() < 0.4f) return@mapNotNull null
+            val mid = PointF()
+            f.getMidPoint(mid)
+            Hit(mid.x / bmp.width, 1f - mid.y / bmp.height, f.eyesDistance() / bmp.width)
+        }
+    } catch (_: Throwable) {
+        emptyList()
+    }
+
     /**
-     * Samples 8 frames across the clip. A facecam = a SMALL face that shows up at about the same spot in at least 3 frames;
+     * Samples 12 frames across the clip. A facecam = a SMALL face that shows up at about the same spot in at least 3 frames;
      * a big face means the speaker fills the screen (then the picture just follows the face). Never throws.
      */
     fun analyze(ctx: Context, uri: Uri, startS: Double, endS: Double, aspect: Float): FaceInfo {
@@ -53,32 +85,32 @@ object Faces {
             r.setDataSource(ctx, uri)
             val w = 960
             val h = ((w / aspect).toInt() / 2) * 2
-            val n8 = 8
-            for (k in 0 until n8) {
-                val t = ((startS + (endS - startS) * (k + 0.5) / n8) * 1e6).toLong()
-                val raw = r.getScaledFrameAtTime(t, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h) ?: continue
-                val b565 = raw.copy(Bitmap.Config.RGB_565, false) ?: continue
-                val ew = b565.width and 1.inv()
-                val bmp = if (ew != b565.width) Bitmap.createBitmap(b565, 0, 0, ew, b565.height) else b565
-                val faces = arrayOfNulls<FaceDetector.Face>(6)
-                val n = FaceDetector(bmp.width, bmp.height, 6).findFaces(bmp, faces)
-                var best = -1f
-                var bestX = 0.5f
-                for (i in 0 until n) {
-                    val f = faces[i] ?: continue
-                    if (f.confidence() < 0.4f) continue
-                    val mid = PointF()
-                    f.getMidPoint(mid)
-                    val x = mid.x / bmp.width
-                    val y = 1f - mid.y / bmp.height
-                    val size = f.eyesDistance() / bmp.width
-                    if (size >= 0.07f) {
-                        if (size > best) { best = size; bestX = x }
-                    } else if (size >= 0.008f) {
-                        small.add(Hit(x, y, size))
+            val n8 = 12
+            val det = try {
+                com.google.mlkit.vision.face.FaceDetection.getClient(
+                    com.google.mlkit.vision.face.FaceDetectorOptions.Builder()
+                        .setPerformanceMode(com.google.mlkit.vision.face.FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+                        .setMinFaceSize(0.02f).build()
+                )
+            } catch (_: Throwable) { null }
+            try {
+                for (k in 0 until n8) {
+                    val t = ((startS + (endS - startS) * (k + 0.5) / n8) * 1e6).toLong()
+                    val raw = r.getScaledFrameAtTime(t, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h) ?: continue
+                    val hits = (if (det != null) detectMl(det, raw) else null) ?: detectLegacy(raw)
+                    var best = -1f
+                    var bestX = 0.5f
+                    for (hit in hits) {
+                        if (hit.size >= 0.07f) {
+                            if (hit.size > best) { best = hit.size; bestX = hit.x }
+                        } else if (hit.size >= 0.008f) {
+                            small.add(hit)
+                        }
                     }
+                    if (best > 0) bigX.add(bestX)
                 }
-                if (best > 0) bigX.add(bestX)
+            } finally {
+                try { det?.close() } catch (_: Throwable) {}
             }
         } catch (_: Throwable) {
         } finally {
@@ -92,7 +124,7 @@ object Faces {
             if (g.size > bestGroup.size) bestGroup = g
         }
         val panX = med(bigX) ?: 0.5f
-        return if (bestGroup.size >= 3 && bigX.size < 3) {
+        return if (bestGroup.size >= 3 && bigX.size < 4) {
             FaceInfo(panX, med(bestGroup.map { it.x }), med(bestGroup.map { it.y }), med(bestGroup.map { it.size }), aspect)
         } else {
             FaceInfo(panX, null, null, null, aspect)

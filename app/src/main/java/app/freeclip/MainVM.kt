@@ -666,10 +666,11 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                     Diag.log(ctx, "ANALYZE start stt=${cfg?.stt?.label ?: "Offline"} lang=${store.lang} translateToEnglish=${cfg?.translate == true} range=${rangeA.toInt()}-${rangeB.toInt()}s")
                     if (cfg == null && store.lang != "en") notice = "Offline mode understands English only, so it cannot detect other languages. For automatic language detection add a free Groq key in Settings > Faster, better results."
                     val cloudTr: Analysis? = if (cfg == null) null else try {
-                        Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble(), onStatus, cloud = cfg)
+                        { Cloud.resetJob(); Speech.analyze(ctx, uri, durationS, rangeA.toDouble(), rangeB.toDouble(), onStatus, cloud = cfg) }()
                             .also {
                                 notice = "Transcript made with ${cfg.stt.label}" + (if (cfg.translate) ", captions translated to English." else ".")
-                                Diag.log(ctx, "ANALYZE cloud done, language=${Cloud.lastLang.ifEmpty { "n/a" }}")
+                                Diag.log(ctx, "ANALYZE cloud done, language=${Cloud.lastLang.ifEmpty { "n/a" }} ${Cloud.jobNote}")
+                                Diag.log(ctx, "TRANSCRIPT sample: " + it.words.take(14).joinToString(" ") { w -> w.w })
                             }
                     } catch (e: CancellationException) {
                         throw e

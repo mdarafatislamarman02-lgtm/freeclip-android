@@ -14,7 +14,7 @@ android {
         applicationId = "app.clipforge"
         minSdk = 29
         targetSdk = 34
-        versionCode = 11
+        versionCode = 12
         versionName = "1.0.0"
     }
 
@@ -64,6 +64,7 @@ dependencies {
     implementation("com.google.guava:guava:33.2.1-android")
 
     val media3 = "1.4.1"
+    implementation("com.google.mlkit:face-detection:16.1.7")
     implementation("androidx.media3:media3-common:$media3")
     implementation("androidx.media3:media3-effect:$media3")
     implementation("androidx.media3:media3-transformer:$media3")
