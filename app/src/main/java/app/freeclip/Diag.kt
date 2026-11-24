@@ -12,6 +12,11 @@ object Diag {
     private val fmt = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US)
 
     @Synchronized
+    fun version(ctx: Context): String = try {
+        val p = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        "${p.versionName} (build ${p.longVersionCode})"
+    } catch (_: Exception) { "?" }
+
     fun log(ctx: Context, msg: String, t: Throwable? = null) {
         try {
             val f = file(ctx)

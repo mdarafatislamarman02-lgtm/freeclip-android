@@ -919,6 +919,7 @@ fun SettingsScreen(vm: MainVM) {
         }
         Panel {
             Label("Problems? Send the log")
+            Text("App version: ${Diag.version(LocalContext.current)}", color = C.Cyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Text("If a video fails or gets stuck, tap this and send me the text. It lists the exact error, not a guess.", color = C.Mute, fontSize = 12.sp)
             val ctx = LocalContext.current
             GradButton("Share diagnostic log", Modifier.fillMaxWidth()) {

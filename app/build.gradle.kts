@@ -14,8 +14,8 @@ android {
         applicationId = "app.clipforge"
         minSdk = 29
         targetSdk = 34
-        versionCode = 12
-        versionName = "1.0.0"
+        versionCode = 13
+        versionName = "1.0.13"
     }
 
     // One fixed key, so a new build installs over the old one (no uninstall needed from now on).

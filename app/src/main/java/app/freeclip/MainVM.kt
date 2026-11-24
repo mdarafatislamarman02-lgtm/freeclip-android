@@ -663,7 +663,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
                         2 -> store.deepgramKey.takeIf { it.isNotBlank() }?.let { Speech.CloudCfg(Cloud.Stt.DEEPGRAM, it, store.lang, false) }
                         else -> null
                     }
-                    Diag.log(ctx, "ANALYZE start stt=${cfg?.stt?.label ?: "Offline"} lang=${store.lang} translateToEnglish=${cfg?.translate == true} range=${rangeA.toInt()}-${rangeB.toInt()}s")
+                    Diag.log(ctx, "ANALYZE start v=${Diag.version(ctx)} stt=${cfg?.stt?.label ?: "Offline"} lang=${store.lang} translateToEnglish=${cfg?.translate == true} range=${rangeA.toInt()}-${rangeB.toInt()}s")
                     if (cfg == null && store.lang != "en") notice = "Offline mode understands English only, so it cannot detect other languages. For automatic language detection add a free Groq key in Settings > Faster, better results."
                     if (cfg != null) Cloud.resetJob()
                     val cloudTr: Analysis? = if (cfg == null) null else try {
